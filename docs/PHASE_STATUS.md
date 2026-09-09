@@ -2,85 +2,56 @@
 
 Single source of truth for build progress. Updated after every phase.
 
+The 69 phases of the master specification (`INSIGHTFORGE AI.pdf`) are tracked here
+as a **consolidated 36-phase** roadmap. No scope is dropped - see
+[`PHASE_MAP.md`](PHASE_MAP.md) for the exact 69 -> 36 crosswalk.
+
 Legend: `NOT STARTED` | `IN PROGRESS` | `PARTIAL` | `COMPLETE` | `BLOCKED`
 
-| Phase | Title | Status | Notes |
-|------:|-------|--------|-------|
-| 0  | Project initialization | **COMPLETE** | Repo scaffold, venv (Python 3.12.10), Git, secrets excluded |
-| 1  | Project architecture | NOT STARTED | |
-| 2  | Requirements engineering | NOT STARTED | |
-| 3  | Business questions | NOT STARTED | |
-| 4  | Dataset design | NOT STARTED | |
-| 5  | Data generator | NOT STARTED | |
-| 6  | Business data model | NOT STARTED | |
-| 7  | Customer data | NOT STARTED | |
-| 8  | Product data | NOT STARTED | |
-| 9  | Geographical data | NOT STARTED | |
-| 10 | Seasonality engine | NOT STARTED | |
-| 11 | Data quality injection | NOT STARTED | |
-| 12 | Business anomaly generation | NOT STARTED | |
-| 13 | Daily data generation | NOT STARTED | |
-| 14 | PostgreSQL installation & configuration | NOT STARTED | Docker container (decided) |
-| 15 | Database star schema | NOT STARTED | |
-| 16 | Operational database tables | NOT STARTED | |
-| 17 | Database indexing | NOT STARTED | |
-| 18 | Database connection layer | NOT STARTED | |
-| 19 | File ingestion | NOT STARTED | |
-| 20 | SHA-256 file fingerprinting | NOT STARTED | |
-| 21 | Data contract | NOT STARTED | |
-| 22 | Schema validation | NOT STARTED | |
-| 23 | Alteryx ingestion workflow | NOT STARTED | Real .yxmd + Python fallback (decided) |
-| 24 | Alteryx data quality workflow | NOT STARTED | |
-| 25 | Alteryx sales ETL | NOT STARTED | |
-| 26 | Alteryx customer & product ETL | NOT STARTED | |
-| 27 | Data quality engine | NOT STARTED | |
-| 28 | Data quality score | NOT STARTED | |
-| 29 | Rejected record management | NOT STARTED | |
-| 30 | Core SQL KPI engine | NOT STARTED | |
-| 31 | Advanced SQL analytics | NOT STARTED | |
-| 32 | Analytical views | NOT STARTED | |
-| 33 | Period comparison engine | NOT STARTED | |
-| 34 | Business change detection | NOT STARTED | |
-| 35 | Z-score anomaly detection | NOT STARTED | |
-| 36 | IQR anomaly detection | NOT STARTED | |
-| 37 | Rolling baseline | NOT STARTED | |
-| 38 | Isolation Forest | NOT STARTED | |
-| 39 | Anomaly fusion | NOT STARTED | |
-| 40 | Severity engine | NOT STARTED | |
-| 41 | Data drift detection | NOT STARTED | |
-| 42 | Drift reporting | NOT STARTED | |
-| 43 | Root-cause engine | NOT STARTED | |
-| 44 | Contribution analysis | NOT STARTED | |
-| 45 | Root-cause confidence | NOT STARTED | |
-| 46 | Business impact engine | NOT STARTED | |
-| 47 | Customer RFM analysis | NOT STARTED | |
-| 48 | Product intelligence | NOT STARTED | |
-| 49 | Forecasting | NOT STARTED | |
-| 50 | Forecast evaluation | NOT STARTED | |
-| 51 | Recommendation engine | NOT STARTED | |
-| 52 | Priority engine | NOT STARTED | |
-| 53 | AI evidence layer | NOT STARTED | Gemini (decided) |
-| 54 | AI Analyst | NOT STARTED | |
-| 55 | AI explanation engine | NOT STARTED | |
-| 56 | Natural language to SQL | NOT STARTED | |
-| 57 | AI security | NOT STARTED | |
-| 58 | Streamlit application | NOT STARTED | |
-| 59 | Streamlit pipeline control | NOT STARTED | |
-| 60 | Power BI data model | NOT STARTED | |
-| 61 | Power BI executive dashboard | NOT STARTED | |
-| 62 | Power BI intelligence pages | NOT STARTED | |
-| 63 | Power BI forecast & pipeline pages | NOT STARTED | |
-| 64 | Automated Excel report | NOT STARTED | |
-| 65 | Automated PDF report | NOT STARTED | |
-| 66 | Alert & email engine | NOT STARTED | |
-| 67 | Observability & failure recovery | NOT STARTED | |
-| 68 | Security, testing & performance | NOT STARTED | |
-| 69 | Final end-to-end delivery | NOT STARTED | |
+| Phase | Spec | Title | Status | Notes |
+|------:|:----:|-------|--------|-------|
+| 0  | 0     | Project initialization | **COMPLETE** | Repo scaffold, venv (Python 3.12.10), Git, secrets excluded |
+| 1  | 1-4   | Architecture, requirements, business questions & dataset design | **COMPLETE** | `docs/architecture.md`, `system-components.md`, `data-flow.md`, `security.md`, `requirements.md`, `business-questions.md`, `dataset-design.md` |
+| 2  | 5-6   | Data generator & business data model | NOT STARTED | |
+| 3  | 7-9   | Customer, product & geographical data | NOT STARTED | |
+| 4  | 10    | Seasonality engine | NOT STARTED | |
+| 5  | 11-12 | Data quality injection & business anomaly ground truth | NOT STARTED | |
+| 6  | 13    | Daily data generation & data/ lifecycle directories | NOT STARTED | |
+| 7  | 14    | PostgreSQL installation & configuration | NOT STARTED | Docker container (decided) |
+| 8  | 15-17 | Star schema, operational tables & indexing | NOT STARTED | |
+| 9  | 18    | Database connection layer | NOT STARTED | `src/database.py` |
+| 10 | 19-20 | File ingestion & SHA-256 fingerprinting | NOT STARTED | orchestrator lands here |
+| 11 | 21-22 | Data contract & schema validation | NOT STARTED | |
+| 12 | 23-24 | Alteryx ingestion & data-quality workflows | NOT STARTED | Real `.yxmd` + Python fallback (decided) |
+| 13 | 25-26 | Alteryx sales / customer / product ETL | NOT STARTED | |
+| 14 | 27-29 | Data quality engine, score & rejected-record management | NOT STARTED | |
+| 15 | 30-31 | Core SQL KPI engine & advanced SQL analytics | NOT STARTED | |
+| 16 | 32    | Analytical views | NOT STARTED | |
+| 17 | 33-34 | Period comparison & business change detection | NOT STARTED | |
+| 18 | 35-36 | Z-score & IQR anomaly detection | NOT STARTED | |
+| 19 | 37-38 | Rolling baseline & Isolation Forest | NOT STARTED | |
+| 20 | 39-40 | Anomaly fusion & severity engine | NOT STARTED | |
+| 21 | 41-42 | Data drift detection & drift reporting | NOT STARTED | |
+| 22 | 43-45 | Root-cause engine, contribution analysis & RCA confidence | NOT STARTED | |
+| 23 | 46    | Business impact engine | NOT STARTED | |
+| 24 | 47-48 | Customer RFM & product intelligence | NOT STARTED | |
+| 25 | 49-50 | Forecasting & forecast evaluation | NOT STARTED | |
+| 26 | 51-52 | Recommendation engine & priority engine | NOT STARTED | |
+| 27 | 53    | AI evidence layer | NOT STARTED | Gemini (decided) |
+| 28 | 54-55 | AI Analyst & AI explanation engine | NOT STARTED | |
+| 29 | 56-57 | Natural-language-to-SQL & AI security | NOT STARTED | |
+| 30 | 58-59 | Streamlit application & pipeline control | NOT STARTED | |
+| 31 | 60    | Power BI data model | NOT STARTED | |
+| 32 | 61-63 | Power BI executive, intelligence & forecast/pipeline pages | NOT STARTED | |
+| 33 | 64-65 | Automated Excel & PDF reports | NOT STARTED | |
+| 34 | 66    | Alert & email engine | NOT STARTED | |
+| 35 | 67    | Observability & failure recovery | NOT STARTED | includes scheduler wiring |
+| 36 | 68-69 | Security, testing, performance & final end-to-end delivery | NOT STARTED | |
 
 ## Environment notes
 
 - **Python**: 3.12.10, project venv at `.venv/` (installed via winget).
-- **PostgreSQL**: to be provisioned via Docker in Phase 14 (`config/docker-compose.postgres.yml`).
+- **PostgreSQL**: to be provisioned via Docker in Phase 7 (`config/docker-compose.postgres.yml`).
 - **Alteryx**: not installed in this environment. Real `.yxmd` workflow files plus a
   Python ETL fallback (identical contract output) will be built; automated Alteryx
   execution will be documented as unverified rather than faked.

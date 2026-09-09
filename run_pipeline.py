@@ -12,7 +12,7 @@ Usage
     python run_pipeline.py --scan            # process every file in data/incoming/
     python run_pipeline.py --scheduler       # run the scheduled-mode loop
 
-Until the orchestrator lands (Phase 19+) this script validates the environment
+Until the orchestrator lands (Phase 10) this script validates the environment
 and reports which phases are implemented, without pretending to do more.
 """
 from __future__ import annotations
@@ -39,13 +39,13 @@ def _load_env() -> None:
 
 
 def _run_orchestrator(args: argparse.Namespace) -> int:
-    """Delegate to the real orchestrator once it exists (Phase 19+)."""
+    """Delegate to the real orchestrator once it exists (Phase 10)."""
     try:
         from src.orchestrator import main as orchestrator_main  # type: ignore
     except ModuleNotFoundError:
         print(
             "[blocked] src/orchestrator.py is not implemented yet.\n"
-            "          The pipeline orchestrator arrives in Phase 19+. "
+            "          The pipeline orchestrator arrives in Phase 10. "
             "See docs/PHASE_STATUS.md for current progress."
         )
         return 3

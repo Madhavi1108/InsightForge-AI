@@ -24,19 +24,21 @@ Intelligence philosophy: **DETECT - EXPLAIN - QUANTIFY - PREDICT - RECOMMEND - C
 ## Status
 
 Built incrementally against the 69-phase master specification
-(`INSIGHTFORGE AI.pdf`). Current progress is tracked in
+(`INSIGHTFORGE AI.pdf`), consolidated into **36 build phases** (see
+[`docs/PHASE_MAP.md`](docs/PHASE_MAP.md) for the 69 -> 36 crosswalk - no scope is
+dropped). Current progress is tracked in
 [`docs/PHASE_STATUS.md`](docs/PHASE_STATUS.md).
 
 | Wave | Phases | Theme | State |
 |------|--------|-------|-------|
-| 0 | 0 | Project initialization | **In progress** |
-| 1 | 1-13 | Architecture, dataset, generation | Not started |
-| 2 | 14-29 | PostgreSQL, ingestion, validation, Alteryx, data quality | Not started |
-| 3 | 30-34 | SQL / KPIs / views / change detection | Not started |
-| 4 | 35-46 | Anomaly / drift / RCA / impact | Not started |
-| 5 | 47-52 | RFM / product intel / forecast / recommendations | Not started |
-| 6 | 53-67 | AI Analyst / NL-to-SQL / Streamlit / Power BI / reporting / alerts | Not started |
-| 7 | 68-69 | Security / testing / performance / final demo | Not started |
+| 0 | 0 | Project initialization | **Complete** |
+| 1 | 1-6 | Architecture, requirements, dataset, generation | Phase 1 complete |
+| 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | Not started |
+| 3 | 15-17 | SQL / KPIs / views / change detection | Not started |
+| 4 | 18-23 | Anomaly / drift / RCA / impact | Not started |
+| 5 | 24-26 | RFM / product intel / forecast / recommendations | Not started |
+| 6 | 27-35 | AI Analyst / NL-to-SQL / Streamlit / Power BI / reporting / alerts / observability | Not started |
+| 7 | 36 | Security / testing / performance / final demo | Not started |
 
 ---
 
@@ -85,8 +87,8 @@ models/       trained ML artifacts (git-ignored contents)
 ### 1. Prerequisites
 
 - Python 3.12
-- Docker (for the PostgreSQL container) — added in Phase 14
-- Power BI Desktop (for the BI model) — added in Phase 60
+- Docker (for the PostgreSQL container) — added in Phase 7
+- Power BI Desktop (for the BI model) — added in Phase 31
 - Alteryx Designer *(optional)* — workflows and a Python ETL fallback are both provided
 
 ### 2. Environment
