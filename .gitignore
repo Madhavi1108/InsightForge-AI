@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------------------
+# InsightForge AI - .gitignore
+# ---------------------------------------------------------------------------
+
+# Secrets / credentials -- NEVER commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+config/secrets.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data -- generated datasets and pipeline artifacts are not versioned
+data/incoming/*
+data/raw/*
+data/processed/*
+data/rejected/*
+data/archive/*
+data/*.csv
+!data/**/.gitkeep
+
+# Logs
+logs/*
+!logs/.gitkeep
+*.log
+
+# Reports (generated)
+reports/*
+!reports/.gitkeep
+
+# Models (trained artifacts)
+models/*.pkl
+models/*.joblib
+models/*.sig
+!models/.gitkeep
+
+# Power BI temp
+dashboard/*.pbix.tmp
+*.pbix.bak
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
