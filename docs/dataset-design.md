@@ -70,3 +70,16 @@ appear via controlled bad-data injection.
 The full dataset is split by `Order_Date` into `data/incoming/sales_YYYY_MM_DD.csv`
 (e.g. `sales_2026_08_01.csv` ... `sales_2026_09_08.csv`), plus a held-out
 `sales_2026_09_09.csv` for the final end-to-end demo.
+
+## Generator
+
+`scripts/generate_dataset.py` (new Phase 2) produces the **clean baseline**
+dataset: 150,000 internally consistent rows over 2026-01-01..2026-09-08, written to
+`data/full_dataset.csv` (git-ignored). It is deterministic for a given `--seed`
+(default `20260909`) and enforces the derived-field rules above via
+`validate_consistency()`. Controlled imperfections, the injected anomaly, and the
+daily-file split are added by later phases (Phases 4-6).
+
+```
+python scripts/generate_dataset.py --rows 150000 --seed 20260909
+```

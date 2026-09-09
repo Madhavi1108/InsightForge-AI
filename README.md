@@ -32,7 +32,7 @@ dropped). Current progress is tracked in
 | Wave | Phases | Theme | State |
 |------|--------|-------|-------|
 | 0 | 0 | Project initialization | **Complete** |
-| 1 | 1-6 | Architecture, requirements, dataset, generation | Phase 1 complete |
+| 1 | 1-6 | Architecture, requirements, dataset, generation | Phases 1-2 complete |
 | 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | Not started |
 | 3 | 15-17 | SQL / KPIs / views / change detection | Not started |
 | 4 | 18-23 | Anomaly / drift / RCA / impact | Not started |
