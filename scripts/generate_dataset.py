@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""InsightForge AI - Phase 2 retail data generator (spec Phases 5-6).
+"""InsightForge AI - retail data generator (spec Phases 5-9).
 
 Produces a **clean, internally consistent** retail order dataset that matches
 ``docs/dataset-design.md``: 22 fields, valid Region->State->City and
@@ -12,9 +12,15 @@ and the business data model
 Generation is fully deterministic for a given ``--seed`` (default 20260909) and
 vectorised with NumPy.
 
+Phase 3 (spec Phases 7-9) adds weighted realism to the clean baseline: a
+lognormal product *appeal* weight so a few products dominate revenue, a ~15%
+subset of high-frequency *repeat* customers, segment-driven basket size /
+discount, and an expanded metro-weighted Indian geography. The internal weight
+columns (``appeal``, ``purchase_weight``, ``is_repeat``, ``city_weight``) live
+only on the reference tables and never reach the 22-field CSV.
+
 Deferred to later phases (see ``docs/PHASE_MAP.md``):
 
-* repeat-customer behaviour, richer catalog, full Indian geography -- Phase 3
 * weekend / month-end / festive / seasonal demand -- Phase 4
 * NULLs, duplicates, invalid values, the injected business anomaly -- Phase 5
 * split into ``data/incoming/sales_YYYY_MM_DD.csv`` -- Phase 6
@@ -57,37 +63,62 @@ DEFAULT_ROWS = 150_000
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "full_dataset.csv"
 
 # --------------------------------------------------------------------------- #
-# Reference data (curated; deepened in Phase 3).
+# Reference data
 # --------------------------------------------------------------------------- #
+# Indian geography (spec Phase 9): Region -> State -> City, every city in exactly
+# one state, every state in exactly one region. >= 20 states / >= 45 cities.
 GEOGRAPHY: dict[str, dict[str, list[str]]] = {
     "North": {
         "Delhi": ["New Delhi"],
-        "Punjab": ["Ludhiana", "Amritsar"],
-        "Uttar Pradesh": ["Lucknow", "Kanpur", "Noida"],
+        "Punjab": ["Ludhiana", "Amritsar", "Jalandhar"],
+        "Haryana": ["Gurugram", "Faridabad", "Panipat"],
+        "Uttar Pradesh": ["Lucknow", "Kanpur", "Noida", "Agra", "Varanasi"],
+        "Himachal Pradesh": ["Shimla", "Solan"],
+        "Jammu and Kashmir": ["Srinagar", "Jammu"],
     },
     "South": {
-        "Karnataka": ["Bengaluru", "Mysuru"],
-        "Tamil Nadu": ["Chennai", "Coimbatore"],
-        "Telangana": ["Hyderabad"],
-        "Kerala": ["Kochi"],
+        "Karnataka": ["Bengaluru", "Mysuru", "Hubballi", "Mangaluru"],
+        "Tamil Nadu": ["Chennai", "Coimbatore", "Madurai", "Tiruchirappalli"],
+        "Telangana": ["Hyderabad", "Warangal"],
+        "Kerala": ["Kochi", "Thiruvananthapuram", "Kozhikode"],
+        "Andhra Pradesh": ["Visakhapatnam", "Vijayawada", "Guntur"],
     },
     "East": {
-        "West Bengal": ["Kolkata", "Howrah"],
-        "Odisha": ["Bhubaneswar"],
-        "Bihar": ["Patna"],
-        "Jharkhand": ["Ranchi"],
+        "West Bengal": ["Kolkata", "Howrah", "Siliguri", "Durgapur"],
+        "Odisha": ["Bhubaneswar", "Cuttack", "Rourkela"],
+        "Bihar": ["Patna", "Gaya", "Bhagalpur"],
+        "Jharkhand": ["Ranchi", "Jamshedpur", "Dhanbad"],
+        "Assam": ["Guwahati", "Dibrugarh"],
     },
     "West": {
-        "Maharashtra": ["Mumbai", "Pune", "Nagpur"],
-        "Gujarat": ["Ahmedabad", "Surat"],
-        "Rajasthan": ["Jaipur", "Jodhpur"],
+        "Maharashtra": ["Mumbai", "Pune", "Nagpur", "Nashik", "Thane"],
+        "Gujarat": ["Ahmedabad", "Surat", "Vadodara", "Rajkot"],
+        "Rajasthan": ["Jaipur", "Jodhpur", "Kota", "Udaipur"],
+        "Goa": ["Panaji", "Margao"],
     },
     "Central": {
-        "Madhya Pradesh": ["Indore", "Bhopal"],
-        "Chhattisgarh": ["Raipur"],
+        "Madhya Pradesh": ["Indore", "Bhopal", "Gwalior", "Jabalpur", "Ujjain"],
+        "Chhattisgarh": ["Raipur", "Bhilai", "Bilaspur"],
+        "Uttarakhand": ["Dehradun", "Haridwar", "Rishikesh", "Haldwani"],
     },
 }
 REGION_BASE_SHIPPING = {"North": 5, "South": 4, "East": 6, "West": 3, "Central": 5}
+
+# City demand tiers (spec Phase 9): metros pull a disproportionate order share.
+METRO_CITIES = {
+    "Mumbai", "New Delhi", "Bengaluru", "Hyderabad", "Chennai", "Kolkata",
+    "Pune", "Ahmedabad",
+}
+LARGE_CITIES = {
+    "Jaipur", "Surat", "Lucknow", "Kanpur", "Nagpur", "Indore", "Bhopal",
+    "Visakhapatnam", "Coimbatore", "Kochi", "Gurugram", "Noida", "Patna",
+    "Bhubaneswar", "Vadodara", "Ludhiana", "Agra", "Nashik", "Faridabad",
+    "Ranchi", "Jamshedpur", "Madurai", "Vijayawada", "Guwahati", "Thane",
+    "Thiruvananthapuram", "Dehradun", "Amritsar", "Jodhpur", "Raipur", "Howrah",
+    "Varanasi",
+}
+CITY_TIER_WEIGHT = {"metro": 6.0, "large": 2.5, "other": 1.0}
+METRO_SHIPPING_BONUS = -1  # metro deliveries run ~1 day faster
 
 # category -> {sub_category: (price_lo, price_hi, cost_ratio_lo, cost_ratio_hi)} (INR)
 CATALOG: dict[str, dict[str, tuple[float, float, float, float]]] = {
@@ -127,8 +158,18 @@ CATALOG: dict[str, dict[str, tuple[float, float, float, float]]] = {
 CATEGORIES = list(CATALOG)
 CATEGORY_WEIGHTS = np.array([0.16, 0.14, 0.30, 0.24, 0.16])
 
+# Product popularity (spec Phase 8): each product gets a lognormal *appeal*
+# weight; a few products end up carrying most of the revenue.
+PRODUCT_APPEAL_SIGMA = 1.1
+
 CUSTOMER_SEGMENTS = ["Consumer", "Corporate", "Home Office"]
 SEGMENT_WEIGHTS = np.array([0.52, 0.30, 0.18])
+
+# Repeat customers (spec Phase 7): baseline purchase propensity is lognormal; a
+# flagged minority is boosted so a small set of customers drives many orders.
+CUSTOMER_FREQUENCY_SIGMA = 0.7
+REPEAT_CUSTOMER_FRACTION = 0.15
+REPEAT_CUSTOMER_BOOST = 6.0
 
 PAYMENT_METHODS = ["UPI", "Credit Card", "Debit Card", "Net Banking", "COD", "Wallet"]
 PAYMENT_WEIGHTS = np.array([0.34, 0.22, 0.14, 0.12, 0.12, 0.06])
@@ -141,6 +182,20 @@ QUANTITY_WEIGHTS = np.array([0.50, 0.24, 0.14, 0.08, 0.04])
 
 DISCOUNT_CHOICES = np.array([0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30])
 DISCOUNT_WEIGHTS = np.array([0.40, 0.20, 0.15, 0.10, 0.08, 0.04, 0.03])
+
+# Segment-driven behaviour (spec Phase 7): "Consumer" reuses the baselines above;
+# Corporate / Home Office buy in larger quantities and negotiate deeper
+# discounts. Each row is a distribution over QUANTITY_CHOICES / DISCOUNT_CHOICES.
+SEGMENT_QUANTITY_WEIGHTS = {
+    "Consumer": QUANTITY_WEIGHTS,
+    "Corporate": np.array([0.34, 0.26, 0.20, 0.13, 0.07]),
+    "Home Office": np.array([0.42, 0.27, 0.17, 0.09, 0.05]),
+}
+SEGMENT_DISCOUNT_WEIGHTS = {
+    "Consumer": DISCOUNT_WEIGHTS,
+    "Corporate": np.array([0.22, 0.20, 0.20, 0.16, 0.12, 0.06, 0.04]),
+    "Home Office": np.array([0.32, 0.22, 0.18, 0.13, 0.09, 0.04, 0.02]),
+}
 
 FIRST_NAMES = [
     "Aarav", "Vivaan", "Aditya", "Vihaan", "Arjun", "Sai", "Reyansh", "Krishna",
@@ -162,14 +217,38 @@ PRODUCT_SERIES = [
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+def _city_tier(city: str) -> str:
+    if city in METRO_CITIES:
+        return "metro"
+    if city in LARGE_CITIES:
+        return "large"
+    return "other"
+
+
 def _geo_rows() -> pd.DataFrame:
-    """Flatten GEOGRAPHY into a (Region, State, City, base_shipping) table."""
+    """Flatten GEOGRAPHY into a (Region, State, City, base_shipping, city_weight) table."""
     rows = []
     for region, states in GEOGRAPHY.items():
         for state, cities in states.items():
             for city in cities:
-                rows.append((region, state, city, REGION_BASE_SHIPPING[region]))
-    return pd.DataFrame(rows, columns=["Region", "State", "City", "base_shipping"])
+                rows.append(
+                    (
+                        region,
+                        state,
+                        city,
+                        REGION_BASE_SHIPPING[region],
+                        CITY_TIER_WEIGHT[_city_tier(city)],
+                    )
+                )
+    return pd.DataFrame(
+        rows, columns=["Region", "State", "City", "base_shipping", "city_weight"]
+    )
+
+
+def _p(weights) -> np.ndarray:
+    """Normalise a non-negative weight vector to sum to 1 (for ``rng.choice`` ``p=``)."""
+    weights = np.asarray(weights, dtype=float)
+    return weights / weights.sum()
 
 
 def valid_geo_tuples() -> set[tuple[str, str, str]]:
@@ -212,6 +291,14 @@ def build_reference_data(
             ),
         }
     )
+    # Repeat-customer behaviour: lognormal baseline propensity, boosted for a
+    # flagged minority. Internal columns - never written to the CSV.
+    freq_base = rng.lognormal(0.0, CUSTOMER_FREQUENCY_SIGMA, n_customers)
+    is_repeat = rng.random(n_customers) < REPEAT_CUSTOMER_FRACTION
+    customers["is_repeat"] = is_repeat
+    customers["purchase_weight"] = np.where(
+        is_repeat, freq_base * REPEAT_CUSTOMER_BOOST, freq_base
+    )
 
     # Products ----------------------------------------------------------------
     prod_category = rng.choice(CATEGORIES, n_products, p=CATEGORY_WEIGHTS)
@@ -236,6 +323,9 @@ def build_reference_data(
 
     series = rng.choice(PRODUCT_SERIES, n_products)
     model_no = rng.integers(100, 1000, n_products)
+    # Product popularity: lognormal appeal weight (internal column). A few
+    # products sell far more than the rest -> Pareto-like revenue concentration.
+    appeal = rng.lognormal(0.0, PRODUCT_APPEAL_SIGMA, n_products)
     products = pd.DataFrame(
         {
             "Product_ID": [f"PROD-{i:05d}" for i in range(1, n_products + 1)],
@@ -247,6 +337,7 @@ def build_reference_data(
             "Sub_Category": sub_category,
             "base_price": np.round(base_price, 2),
             "cost_ratio": cost_ratio,
+            "appeal": appeal,
         }
     )
 
@@ -270,15 +361,37 @@ def generate_orders(
     if n_days < 1:
         raise ValueError("end date must not precede start date")
 
-    cust_idx = rng.integers(0, len(customers), n_rows)
-    prod_idx = rng.integers(0, len(products), n_rows)
-    geo_idx = rng.integers(0, len(geo), n_rows)
+    # Weighted selection: repeat customers, popular products and metro cities are
+    # drawn disproportionately often. Indices stay in-range -> referential
+    # integrity is preserved.
+    cust_idx = rng.choice(
+        len(customers), size=n_rows, p=_p(customers["purchase_weight"].to_numpy())
+    )
+    prod_idx = rng.choice(
+        len(products), size=n_rows, p=_p(products["appeal"].to_numpy())
+    )
+    geo_idx = rng.choice(
+        len(geo), size=n_rows, p=_p(geo["city_weight"].to_numpy())
+    )
     day_offset = rng.integers(0, n_days, n_rows)
 
     order_date = np.datetime64(start) + day_offset.astype("timedelta64[D]")
 
-    quantity = rng.choice(QUANTITY_CHOICES, n_rows, p=QUANTITY_WEIGHTS)
-    discount = rng.choice(DISCOUNT_CHOICES, n_rows, p=DISCOUNT_WEIGHTS)
+    # Basket size and discount depend on the customer's segment.
+    row_segment = customers["Customer_Segment"].to_numpy()[cust_idx]
+    quantity = np.empty(n_rows, dtype=np.int64)
+    discount = np.empty(n_rows, dtype=float)
+    for seg in CUSTOMER_SEGMENTS:  # fixed iteration order -> deterministic
+        mask = row_segment == seg
+        k = int(mask.sum())
+        if k == 0:
+            continue
+        quantity[mask] = rng.choice(
+            QUANTITY_CHOICES, k, p=_p(SEGMENT_QUANTITY_WEIGHTS[seg])
+        )
+        discount[mask] = rng.choice(
+            DISCOUNT_CHOICES, k, p=_p(SEGMENT_DISCOUNT_WEIGHTS[seg])
+        )
 
     base_price = products["base_price"].to_numpy()[prod_idx]
     cost_ratio = products["cost_ratio"].to_numpy()[prod_idx]
@@ -288,7 +401,9 @@ def generate_orders(
     payment_method = rng.choice(PAYMENT_METHODS, n_rows, p=PAYMENT_WEIGHTS)
     order_status = rng.choice(ORDER_STATUSES, n_rows, p=ORDER_STATUS_WEIGHTS)
 
-    base_ship = geo["base_shipping"].to_numpy()[geo_idx]
+    base_ship = geo["base_shipping"].to_numpy()[geo_idx].astype(int)
+    metro_row = np.isin(geo["City"].to_numpy()[geo_idx], list(METRO_CITIES))
+    base_ship = base_ship + np.where(metro_row, METRO_SHIPPING_BONUS, 0)
     shipping_days = np.clip(base_ship + rng.integers(-1, 4, n_rows), 0, 21).astype(float)
     not_shipped = np.isin(order_status, ["Pending", "Cancelled"])
     shipping_days[not_shipped] = np.nan
@@ -337,6 +452,12 @@ def validate_consistency(
 ) -> None:
     """Assert the dataset obeys the business data model and the design contract."""
     assert list(df.columns) == COLUMNS, "column set / order does not match COLUMNS"
+
+    internal_only = {
+        "appeal", "purchase_weight", "is_repeat", "city_weight",
+        "base_price", "cost_ratio",
+    }
+    assert not (internal_only & set(df.columns)), "internal generator column leaked into the dataset"
 
     revenue_check = np.round(
         df["Quantity"] * df["Unit_Price"] * (1.0 - df["Discount"]), 2
@@ -388,17 +509,29 @@ def generate_dataset(
 
 def summarise(df: pd.DataFrame) -> str:
     dates = pd.to_datetime(df["Order_Date"])
+    prod_rev = df.groupby("Product_ID")["Revenue"].sum().sort_values(ascending=False)
+    top_decile = max(1, len(prod_rev) // 10)
+    prod_share = prod_rev.head(top_decile).sum() / prod_rev.sum()
+    order_counts = df.groupby("Customer_ID").size().sort_values(ascending=False)
+    top_5pct = max(1, len(order_counts) // 20)
+    cust_share = order_counts.head(top_5pct).sum() / len(df)
+    metro_share = df["City"].isin(METRO_CITIES).mean()
     lines = [
-        f"rows                 : {len(df):,}",
-        f"date span            : {dates.min().date()} .. {dates.max().date()}",
-        f"distinct customers   : {df['Customer_ID'].nunique():,}",
-        f"distinct products    : {df['Product_ID'].nunique():,}",
-        f"total revenue (INR)  : {df['Revenue'].sum():,.2f}",
-        f"total profit  (INR)  : {df['Profit'].sum():,.2f}",
-        f"mandatory nulls      : {int(df[MANDATORY_COLUMNS].isna().sum().sum())}",
-        f"shipping_days nulls  : {int(df['Shipping_Days'].isna().sum())} "
+        f"rows                        : {len(df):,}",
+        f"date span                   : {dates.min().date()} .. {dates.max().date()}",
+        f"distinct customers          : {df['Customer_ID'].nunique():,}",
+        f"distinct products           : {df['Product_ID'].nunique():,}",
+        f"distinct states / cities    : {df['State'].nunique()} / {df['City'].nunique()}",
+        f"total revenue (INR)         : {df['Revenue'].sum():,.2f}",
+        f"total profit  (INR)         : {df['Profit'].sum():,.2f}",
+        f"top-decile product rev share: {prod_share:.2%}",
+        f"busiest customer orders     : {int(order_counts.iloc[0])}",
+        f"orders from top-5% customers: {cust_share:.2%}",
+        f"metro-city order share      : {metro_share:.2%}",
+        f"mandatory nulls             : {int(df[MANDATORY_COLUMNS].isna().sum().sum())}",
+        f"shipping_days nulls         : {int(df['Shipping_Days'].isna().sum())} "
         f"(Pending/Cancelled)",
-        f"return rate          : {df['Return_Status'].eq('Returned').mean():.2%}",
+        f"return rate                 : {df['Return_Status'].eq('Returned').mean():.2%}",
     ]
     return "\n".join(lines)
 
@@ -406,7 +539,7 @@ def summarise(df: pd.DataFrame) -> str:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="generate_dataset.py",
-        description="InsightForge AI - Phase 2 retail data generator",
+        description="InsightForge AI - retail data generator (Phases 2-3)",
     )
     p.add_argument("--rows", type=int, default=DEFAULT_ROWS)
     p.add_argument("--seed", type=int, default=DEFAULT_SEED)

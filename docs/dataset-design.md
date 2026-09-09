@@ -46,13 +46,45 @@ is internally consistent; the ETL re-derives and asserts them on load.
 
 `Region -> State -> City` relationships are fixed and valid: every `City` belongs
 to exactly one `State`, every `State` to exactly one `Region`. The generator
-draws from a curated Indian region/state/city table; invalid combinations only
+draws from a curated Indian region/state/city table (**5 regions, >=20 states,
+>=45 cities**; every region has at least 3 states); invalid combinations only
 appear via controlled bad-data injection.
+
+Each city carries an internal **demand weight** (tier `metro` / `large` / `other`
+- *not* a CSV column), so metros (Mumbai, New Delhi, Bengaluru, Hyderabad,
+Chennai, Kolkata, Pune, Ahmedabad) receive a disproportionate share of orders.
+Metro deliveries also run ~1 day faster (`METRO_SHIPPING_BONUS`).
 
 ## Category hierarchy
 
 `Category -> Sub_Category` is fixed. `Product_ID` maps to exactly one
 `Product_Name`, `Category`, and `Sub_Category`.
+
+## Customer behaviour model (spec Phase 7)
+
+Segments are unchanged (`Consumer`, `Corporate`, `Home Office`). About **15% of
+customers are high-frequency "repeat" buyers**: generation assigns each customer
+an internal lognormal `purchase_weight` and an `is_repeat` flag (neither is a CSV
+column) and selects the ordering customer in proportion to that weight, so a
+minority of customers generate a large share of order lines. `Corporate` and
+`Home Office` customers buy in larger quantities and take deeper discounts than
+`Consumer` (`SEGMENT_QUANTITY_WEIGHTS` / `SEGMENT_DISCOUNT_WEIGHTS`; `Consumer`
+reuses the global baselines). Category mix by segment is deferred (Phase 24
+candidate).
+
+## Product popularity model (spec Phase 8)
+
+Each product gets an internal lognormal `appeal` weight (not a CSV column) and is
+selected in proportion to it, producing Pareto-like revenue concentration
+(top-decile products carry a large majority of revenue). The catalog shape is
+unchanged (5 categories, same sub-categories); "products behave differently" is
+realised through `appeal` dispersion, not new fields.
+
+## Internal generator-only columns
+
+`appeal`, `purchase_weight`, `is_repeat`, `city_weight`, `base_price`,
+`cost_ratio` live only on the generator's reference tables. `validate_consistency`
+asserts none of them reach the dataset - the CSV is exactly the 22 fields above.
 
 ## Controlled imperfections (spec Phases 11-12, generated later)
 
@@ -73,12 +105,15 @@ The full dataset is split by `Order_Date` into `data/incoming/sales_YYYY_MM_DD.c
 
 ## Generator
 
-`scripts/generate_dataset.py` (new Phase 2) produces the **clean baseline**
+`scripts/generate_dataset.py` (new Phases 2-3) produces the **clean baseline**
 dataset: 150,000 internally consistent rows over 2026-01-01..2026-09-08, written to
 `data/full_dataset.csv` (git-ignored). It is deterministic for a given `--seed`
 (default `20260909`) and enforces the derived-field rules above via
-`validate_consistency()`. Controlled imperfections, the injected anomaly, and the
-daily-file split are added by later phases (Phases 4-6).
+`validate_consistency()`. Phase 3 adds weighted realism - product `appeal`,
+repeat-customer `purchase_weight`, segment-driven basket/discount, and
+metro-weighted city demand - on top of that baseline. Controlled imperfections,
+the injected anomaly, and the daily-file split are added by later phases
+(Phases 4-6).
 
 ```
 python scripts/generate_dataset.py --rows 150000 --seed 20260909

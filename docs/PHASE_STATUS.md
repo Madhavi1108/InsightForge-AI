@@ -13,7 +13,7 @@ Legend: `NOT STARTED` | `IN PROGRESS` | `PARTIAL` | `COMPLETE` | `BLOCKED`
 | 0  | 0     | Project initialization | **COMPLETE** | Repo scaffold, venv (Python 3.12.10), Git, secrets excluded |
 | 1  | 1-4   | Architecture, requirements, business questions & dataset design | **COMPLETE** | `docs/architecture.md`, `system-components.md`, `data-flow.md`, `security.md`, `requirements.md`, `business-questions.md`, `dataset-design.md` |
 | 2  | 5-6   | Data generator & business data model | **COMPLETE** | `scripts/generate_dataset.py`; 150k clean rows, window 2026-01-01..2026-09-08, seed 20260909 -> `data/full_dataset.csv`; Revenue/Profit model asserted |
-| 3  | 7-9   | Customer, product & geographical data | NOT STARTED | |
+| 3  | 7-9   | Customer, product & geographical data | **COMPLETE** | `generate_dataset.py`: lognormal product `appeal` (top-decile revenue concentration), ~15% repeat customers via lognormal `purchase_weight` + boost, segment-driven basket size & discount, expanded Indian geography (23 states / 74 cities) with metro-weighted city demand + faster metro shipping; internal weight columns kept out of the 22-col CSV; determinism + all Phase 2 invariants preserved; `tests/test_phase03_customer_product_geo.py` |
 | 4  | 10    | Seasonality engine | NOT STARTED | |
 | 5  | 11-12 | Data quality injection & business anomaly ground truth | NOT STARTED | |
 | 6  | 13    | Daily data generation & data/ lifecycle directories | NOT STARTED | |
