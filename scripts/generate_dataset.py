@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""InsightForge AI - retail data generator (spec Phases 5-10).
+"""InsightForge AI - retail data generator (spec Phases 5-12).
 
 Produces a **clean, internally consistent** retail order dataset that matches
 ``docs/dataset-design.md``: 22 fields, valid Region->State->City and
@@ -29,9 +29,28 @@ dates in ``FESTIVE_PERIODS`` are curated / approximate shopping-sale windows, no
 astronomically exact festival dates; the requirement is documented, reproducible
 logic.
 
+Phase 5 (spec Phases 11-12) layers **controlled imperfections** on top of the
+clean baseline to produce the *delivery* dataset the pipeline actually ingests:
+
+* :func:`inject_business_anomaly` -- a planted, documented business anomaly on
+  ``West -> Electronics -> Laptop`` (epicentre) plus a lighter drag on the rest of
+  ``West -> Electronics`` over a tail window: Orders down, Revenue down, Returns
+  up, Shipping_Days up, Discount up. Anomaly rows stay internally consistent
+  (Revenue/Profit re-derived); the realised deltas are written to
+  ``docs/anomaly-ground-truth.md``.
+* :func:`inject_data_quality_issues` -- NULLs, duplicate rows, invalid dates,
+  negative quantities, invalid discounts, unknown customer IDs, invalid
+  categories, extreme prices, inconsistent text. Every defect is recorded in an
+  issue log (``Order_ID, row_pos, issue_type, dq_dimension, detail``).
+
+``generate_dataset`` still returns the **clean, validated** frame; the two
+injectors + :func:`build_delivery_dataset` produce the dirty frame. Injection is
+deterministic from ``--seed`` (child generators ``seed + 1`` / ``seed + 2``). The
+CLI writes the delivery dataset by default; ``--clean`` restores the pristine
+file.
+
 Deferred to later phases (see ``docs/PHASE_MAP.md``):
 
-* NULLs, duplicates, invalid values, the injected business anomaly -- Phase 5
 * split into ``data/incoming/sales_YYYY_MM_DD.csv`` -- Phase 6
 
 Usage
@@ -39,6 +58,7 @@ Usage
     python scripts/generate_dataset.py
     python scripts/generate_dataset.py --rows 150000 --seed 20260909 \
         --start 2026-01-01 --end 2026-09-08 --output data/full_dataset.csv
+    python scripts/generate_dataset.py --clean      # pristine, no injection
 """
 from __future__ import annotations
 
@@ -46,6 +66,7 @@ import argparse
 import calendar
 import datetime as dt
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -71,6 +92,8 @@ DEFAULT_START = dt.date(2026, 1, 1)
 DEFAULT_END = dt.date(2026, 9, 8)
 DEFAULT_ROWS = 150_000
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "full_dataset.csv"
+DEFAULT_ISSUE_LOG = PROJECT_ROOT / "data" / "full_dataset_issues.csv"
+DEFAULT_GROUND_TRUTH = PROJECT_ROOT / "docs" / "anomaly-ground-truth.md"
 
 # --------------------------------------------------------------------------- #
 # Reference data
@@ -238,6 +261,77 @@ FESTIVE_PERIODS: list[tuple[str, str, str, float]] = [
 #    late spring and then climbs into the Oct-Nov Indian festive quarter.
 SEASONAL_AMPLITUDE = 0.15
 SEASONAL_PEAK_DOY = 315
+
+# --------------------------------------------------------------------------- #
+# Business anomaly (spec Phase 12)
+# --------------------------------------------------------------------------- #
+# A planted, documented anomaly used to validate change detection, anomaly
+# fusion, RCA and business-impact downstream. Epicentre: West -> Electronics ->
+# Laptop over a tail window; a lighter drag hits the rest of West -> Electronics
+# so the Region and Category roll-ups also move (RCA drill-down path).
+ANOMALY_WINDOW_START = dt.date(2026, 8, 1)
+ANOMALY_WINDOW_END = dt.date(2026, 9, 8)
+ANOMALY_REGION = "West"
+ANOMALY_CATEGORY = "Electronics"
+ANOMALY_SUBCATEGORY = "Laptop"
+# Effect knobs per tier. discount_add / shipping_add are absolute; drop_frac and
+# return_rate_add are fractions of the tier's in-window rows.
+ANOMALY_PRIMARY = {  # West & Electronics & Laptop
+    "drop_frac": 0.55,
+    "discount_add": 0.20,
+    "return_rate_add": 0.30,
+    "shipping_add": 10,
+    "shipping_clip": 30,  # may inflate past the normal 0-21 band
+}
+ANOMALY_SECONDARY = {  # West & Electronics & not-Laptop
+    "drop_frac": 0.18,
+    "discount_add": 0.05,
+    "return_rate_add": 0.06,
+    "shipping_add": 3,
+    "shipping_clip": 25,
+}
+
+# --------------------------------------------------------------------------- #
+# Data-quality injection (spec Phase 11)
+# --------------------------------------------------------------------------- #
+# The seven data-quality dimensions the downstream engine (spec Phase 27) scores.
+DQ_DIMENSIONS = (
+    "Completeness", "Validity", "Uniqueness", "Consistency",
+    "Accuracy", "Timeliness", "Referential Integrity",
+)
+# (issue_type, dq_dimension, row_count_at_DEFAULT_ROWS). Counts scale linearly
+# with the row count (>= 1) so smaller datasets still get every category.
+DQ_ISSUE_PLAN = (
+    ("null_mandatory", "Completeness", 400),
+    ("duplicate_row", "Uniqueness", 250),
+    ("invalid_date", "Timeliness", 150),
+    ("negative_quantity", "Validity", 150),
+    ("invalid_discount", "Validity", 150),
+    ("unknown_customer_id", "Referential Integrity", 120),
+    ("invalid_category", "Referential Integrity", 120),
+    ("extreme_price", "Accuracy", 120),
+    ("inconsistent_text", "Consistency", 300),
+)
+DQ_NULL_TARGET_COLUMNS = (
+    "Customer_ID", "Customer_Name", "City", "Quantity",
+    "Unit_Price", "Payment_Method", "Order_Status",
+)
+DQ_BAD_DATES = ("2026-13-40", "31/02/2026", "2027-06-01", "")
+DQ_BAD_QUANTITIES = (0, -1, -3)
+DQ_BAD_DISCOUNTS = (-0.10, 1.50, 2.0)
+DQ_BAD_CUSTOMER_IDS = ("CUST-999999", "UNKNOWN", "cust-abc")
+DQ_BAD_CATEGORIES = ("Gadgets", "misc", "ELECTRONICS!!")
+DQ_EXTREME_PRICES = (0.0, 99_999_999.0, -500.0)
+# (column, mangled value) pairs for the "inconsistent text" defect.
+DQ_TEXT_MANGLES = (
+    ("Customer_Segment", "consumer"),
+    ("Customer_Segment", "CORPORATE "),
+    ("Region", " West"),
+    ("Region", "south"),
+    ("Payment_Method", "upi"),
+    ("Payment_Method", " Credit Card "),
+)
+DQ_ISSUE_LOG_COLUMNS = ("Order_ID", "row_pos", "issue_type", "dq_dimension", "detail")
 
 FIRST_NAMES = [
     "Aarav", "Vivaan", "Aditya", "Vihaan", "Arjun", "Sai", "Reyansh", "Krishna",
@@ -598,6 +692,402 @@ def generate_dataset(
     return df.reset_index(drop=True)
 
 
+# --------------------------------------------------------------------------- #
+# Phase 5 - controlled imperfections (spec Phases 11-12)
+# --------------------------------------------------------------------------- #
+def _scaled_plan(rows: int) -> list[tuple[str, str, int]]:
+    """``DQ_ISSUE_PLAN`` with per-category counts scaled to ``rows`` (>= 1)."""
+    scale = rows / DEFAULT_ROWS
+    return [
+        (kind, dim, max(1, round(count * scale)))
+        for kind, dim, count in DQ_ISSUE_PLAN
+    ]
+
+
+def _empty_issue_log() -> pd.DataFrame:
+    return pd.DataFrame({c: pd.Series(dtype=object) for c in DQ_ISSUE_LOG_COLUMNS})
+
+
+def _window_mask(df: pd.DataFrame, lo: dt.date, hi: dt.date) -> np.ndarray:
+    d = pd.to_datetime(df["Order_Date"]).dt.date.to_numpy()
+    return (d >= lo) & (d <= hi)
+
+
+def _agg_slice(df: pd.DataFrame, mask: np.ndarray) -> dict:
+    """KPI aggregates for the rows selected by ``mask`` (clean frame only)."""
+    s = df.loc[mask]
+    n = len(s)
+    ship = pd.to_numeric(s["Shipping_Days"], errors="coerce")
+    return {
+        "orders": int(n),
+        "revenue": round(float(s["Revenue"].sum()), 2),
+        "avg_discount": round(float(s["Discount"].mean()), 4) if n else 0.0,
+        "return_rate": round(float((s["Return_Status"] == "Returned").mean()), 4) if n else 0.0,
+        "avg_shipping_days": round(float(ship.mean()), 3) if ship.notna().any() else 0.0,
+    }
+
+
+def inject_business_anomaly(
+    df: pd.DataFrame, rng: np.random.Generator
+) -> tuple[pd.DataFrame, dict]:
+    """Plant the documented ``West -> Electronics -> Laptop`` anomaly (spec Phase 12).
+
+    Operates on the clean frame. Two tiers (Laptop epicentre + lighter drag on the
+    rest of West/Electronics) over ``[ANOMALY_WINDOW_START, ANOMALY_WINDOW_END]``:
+    drop a fraction of orders, deepen ``Discount``, inflate ``Shipping_Days``, flip
+    extra rows to ``Returned``. ``Revenue`` / ``Profit`` are re-derived so anomaly
+    rows stay internally consistent (they are abnormal-but-valid, not bad data).
+    Returns the mutated frame and a ground-truth stats dict.
+    """
+    df = df.reset_index(drop=True).copy()
+    n = len(df)
+    in_window = _window_mask(df, ANOMALY_WINDOW_START, ANOMALY_WINDOW_END)
+    in_rc = (
+        (df["Region"].to_numpy() == ANOMALY_REGION)
+        & (df["Category"].to_numpy() == ANOMALY_CATEGORY)
+    )
+    is_sub = df["Sub_Category"].to_numpy() == ANOMALY_SUBCATEGORY
+
+    discount = df["Discount"].to_numpy(dtype=float).copy()
+    shipping = df["Shipping_Days"].to_numpy(dtype=float).copy()
+    status = df["Order_Status"].to_numpy(dtype=object).copy()
+    retstat = df["Return_Status"].to_numpy(dtype=object).copy()
+    drop = np.zeros(n, dtype=bool)
+
+    tiers = (
+        ("primary", in_window & in_rc & is_sub, ANOMALY_PRIMARY),
+        ("secondary", in_window & in_rc & ~is_sub, ANOMALY_SECONDARY),
+    )
+    dropped = {}
+    for name, mask, k in tiers:  # fixed order -> deterministic
+        idx = np.flatnonzero(mask)
+        drop_sel = rng.random(idx.size) < k["drop_frac"]
+        drop[idx[drop_sel]] = True
+        dropped[name] = int(drop_sel.sum())
+        keep = idx[~drop_sel]
+
+        discount[keep] = np.minimum(discount[keep] + k["discount_add"], 0.8)
+        m = ~np.isnan(shipping[keep])
+        shipping[keep[m]] = np.minimum(
+            shipping[keep[m]] + k["shipping_add"], k["shipping_clip"]
+        )
+        eligible = keep[status[keep] != "Returned"]
+        flip = eligible[rng.random(eligible.size) < k["return_rate_add"]]
+        status[flip] = "Returned"
+        retstat[flip] = "Returned"
+
+    df["Discount"] = np.round(discount, 3)
+    df["Shipping_Days"] = shipping
+    df["Order_Status"] = status
+    df["Return_Status"] = retstat
+    df = df.loc[~drop].reset_index(drop=True)
+    df = apply_business_model(df)  # re-derive Revenue / Profit for the anomaly rows
+
+    win_days = (ANOMALY_WINDOW_END - ANOMALY_WINDOW_START).days + 1
+    base_end = ANOMALY_WINDOW_START - dt.timedelta(days=1)
+    base_start = base_end - dt.timedelta(days=win_days - 1)
+    anom_w = _window_mask(df, ANOMALY_WINDOW_START, ANOMALY_WINDOW_END)
+    base_w = _window_mask(df, base_start, base_end)
+    rc = (
+        (df["Region"].to_numpy() == ANOMALY_REGION)
+        & (df["Category"].to_numpy() == ANOMALY_CATEGORY)
+    )
+    sub = df["Sub_Category"].to_numpy() == ANOMALY_SUBCATEGORY
+    tier_masks = {
+        "primary": rc & sub,
+        "secondary": rc & ~sub,
+        "macro": np.ones(len(df), dtype=bool),
+    }
+    stats = {
+        "window": {
+            "start": ANOMALY_WINDOW_START.isoformat(),
+            "end": ANOMALY_WINDOW_END.isoformat(),
+            "days": win_days,
+        },
+        "baseline_window": {
+            "start": base_start.isoformat(),
+            "end": base_end.isoformat(),
+            "days": win_days,
+        },
+        "slice": {
+            "region": ANOMALY_REGION,
+            "category": ANOMALY_CATEGORY,
+            "subcategory": ANOMALY_SUBCATEGORY,
+        },
+        "knobs": {"primary": ANOMALY_PRIMARY, "secondary": ANOMALY_SECONDARY},
+        "rows_dropped": {**dropped, "total": int(drop.sum())},
+    }
+    for tier, tmask in tier_masks.items():
+        stats[tier] = {
+            "baseline": _agg_slice(df, base_w & tmask),
+            "anomaly": _agg_slice(df, anom_w & tmask),
+        }
+    return df, stats
+
+
+def inject_data_quality_issues(
+    df: pd.DataFrame, rng: np.random.Generator, plan_rows: int | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Introduce controlled, reproducible bad data (spec Phase 11).
+
+    Corrupts a small disjoint set of rows - NULLs, duplicate rows, invalid dates,
+    negative quantities, invalid discounts, unknown customer IDs, invalid
+    categories, extreme prices, inconsistent text - and returns the dirtied frame
+    plus an **issue log** (``Order_ID, row_pos, issue_type, dq_dimension,
+    detail``). Revenue / Profit are left untouched, so rows with a bad
+    quantity / price / discount also carry a deliberate Consistency defect.
+    """
+    df = df.reset_index(drop=True).copy()
+    n = len(df)
+    # object dtype so malformed string / None values write cleanly to CSV.
+    df["Order_Date"] = pd.to_datetime(df["Order_Date"]).dt.strftime("%Y-%m-%d")
+    df["Quantity"] = df["Quantity"].astype(object)
+
+    plan = _scaled_plan(plan_rows if plan_rows is not None else n)
+    counts = {kind: c for kind, _, c in plan}
+    dims = {kind: dim for kind, dim, _ in plan}
+    total = sum(counts.values())
+    pool = rng.choice(n, size=total, replace=False)
+
+    segments: dict[str, np.ndarray] = {}
+    cursor = 0
+    for kind, _, c in plan:
+        segments[kind] = pool[cursor:cursor + c]
+        cursor += c
+
+    order_id = df["Order_ID"].to_numpy()
+    records: list[tuple] = []
+
+    def _log(pos: int, kind: str, detail: str) -> None:
+        records.append((order_id[pos], int(pos), kind, dims[kind], detail))
+
+    for j, pos in enumerate(segments["null_mandatory"]):
+        col = DQ_NULL_TARGET_COLUMNS[j % len(DQ_NULL_TARGET_COLUMNS)]
+        df.at[pos, col] = None
+        _log(pos, "null_mandatory", f"{col}=NULL")
+
+    for j, pos in enumerate(segments["invalid_date"]):
+        val = DQ_BAD_DATES[j % len(DQ_BAD_DATES)]
+        df.at[pos, "Order_Date"] = val
+        _log(pos, "invalid_date", f"Order_Date={val!r}")
+
+    for j, pos in enumerate(segments["negative_quantity"]):
+        val = DQ_BAD_QUANTITIES[j % len(DQ_BAD_QUANTITIES)]
+        df.at[pos, "Quantity"] = val
+        _log(pos, "negative_quantity", f"Quantity={val}")
+
+    for j, pos in enumerate(segments["invalid_discount"]):
+        val = DQ_BAD_DISCOUNTS[j % len(DQ_BAD_DISCOUNTS)]
+        df.at[pos, "Discount"] = val
+        _log(pos, "invalid_discount", f"Discount={val}")
+
+    for j, pos in enumerate(segments["unknown_customer_id"]):
+        val = DQ_BAD_CUSTOMER_IDS[j % len(DQ_BAD_CUSTOMER_IDS)]
+        df.at[pos, "Customer_ID"] = val
+        _log(pos, "unknown_customer_id", f"Customer_ID={val!r}")
+
+    for j, pos in enumerate(segments["invalid_category"]):
+        val = DQ_BAD_CATEGORIES[j % len(DQ_BAD_CATEGORIES)]
+        df.at[pos, "Category"] = val
+        _log(pos, "invalid_category", f"Category={val!r}")
+
+    for j, pos in enumerate(segments["extreme_price"]):
+        val = DQ_EXTREME_PRICES[j % len(DQ_EXTREME_PRICES)]
+        df.at[pos, "Unit_Price"] = val
+        _log(pos, "extreme_price", f"Unit_Price={val}")
+
+    for j, pos in enumerate(segments["inconsistent_text"]):
+        col, val = DQ_TEXT_MANGLES[j % len(DQ_TEXT_MANGLES)]
+        df.at[pos, col] = val
+        _log(pos, "inconsistent_text", f"{col}={val!r}")
+
+    # Duplicate rows are appended verbatim (same Order_ID).
+    dup_src = segments["duplicate_row"]
+    dup_rows = df.iloc[dup_src].copy()
+    df = pd.concat([df, dup_rows], ignore_index=True)
+    for offset, src_pos in enumerate(dup_src):
+        new_pos = n + offset
+        records.append(
+            (order_id[src_pos], int(new_pos), "duplicate_row",
+             dims["duplicate_row"], f"verbatim copy of row_pos {int(src_pos)}")
+        )
+
+    issue_log = (
+        pd.DataFrame(records, columns=list(DQ_ISSUE_LOG_COLUMNS))
+        .sort_values(["row_pos", "issue_type"])
+        .reset_index(drop=True)
+    )
+    return df, issue_log
+
+
+def validate_delivery_structure(df: pd.DataFrame) -> None:
+    """The only contract that survives injection: shape, not content."""
+    assert list(df.columns) == COLUMNS, "delivery column set / order changed"
+    assert len(df) > 0, "empty delivery dataset"
+    assert df["Order_ID"].notna().all(), "null Order_ID in delivery dataset"
+
+
+@dataclass
+class DeliveryResult:
+    """Bundle returned by :func:`build_delivery_dataset`."""
+
+    clean_df: pd.DataFrame
+    delivery_df: pd.DataFrame
+    issue_log: pd.DataFrame
+    anomaly_stats: dict
+    counts: dict
+
+
+def build_delivery_dataset(
+    rows: int = DEFAULT_ROWS,
+    seed: int = DEFAULT_SEED,
+    start: dt.date = DEFAULT_START,
+    end: dt.date = DEFAULT_END,
+    inject_issues: bool = True,
+    inject_anomaly: bool = True,
+) -> DeliveryResult:
+    """Clean baseline -> business anomaly -> data-quality issues -> delivery frame.
+
+    Deterministic for a given ``seed``: the injectors use child generators
+    ``seed + 1`` (anomaly) and ``seed + 2`` (data quality), leaving the clean
+    generator's RNG stream untouched.
+    """
+    clean = generate_dataset(rows=rows, seed=seed, start=start, end=end)
+    df = clean
+    anomaly_stats: dict = {}
+    if inject_anomaly:
+        df, anomaly_stats = inject_business_anomaly(df, np.random.default_rng(seed + 1))
+    issue_log = _empty_issue_log()
+    if inject_issues:
+        df, issue_log = inject_data_quality_issues(
+            df, np.random.default_rng(seed + 2), plan_rows=rows
+        )
+    validate_delivery_structure(df)
+    corrupt_rows = int(pd.to_numeric(issue_log["row_pos"], errors="coerce").nunique()) if len(issue_log) else 0
+    counts = {
+        "clean_rows": len(clean),
+        "delivered_rows": len(df),
+        "issue_rows": len(issue_log),
+        "corruption_pct": round(100.0 * corrupt_rows / len(clean), 3) if len(clean) else 0.0,
+    }
+    return DeliveryResult(clean, df, issue_log, anomaly_stats, counts)
+
+
+def anomaly_ground_truth_markdown(stats: dict, counts: dict, seed: int = DEFAULT_SEED) -> str:
+    """Render ``docs/anomaly-ground-truth.md`` from realised anomaly stats."""
+    sl = stats["slice"]
+    w, bw = stats["window"], stats["baseline_window"]
+
+    def _delta_rows(tier: str) -> str:
+        b, a = stats[tier]["baseline"], stats[tier]["anomaly"]
+        def pct(x, y):
+            return "n/a" if not x else f"{(y - x) / x * 100:+.1f}%"
+        return "\n".join([
+            f"| Orders | {b['orders']:,} | {a['orders']:,} | {pct(b['orders'], a['orders'])} |",
+            f"| Revenue (INR) | {b['revenue']:,.0f} | {a['revenue']:,.0f} | {pct(b['revenue'], a['revenue'])} |",
+            f"| Avg discount | {b['avg_discount']:.3f} | {a['avg_discount']:.3f} | {a['avg_discount'] - b['avg_discount']:+.3f} |",
+            f"| Return rate | {b['return_rate']:.1%} | {a['return_rate']:.1%} | {(a['return_rate'] - b['return_rate']) * 100:+.1f} pp |",
+            f"| Avg shipping days | {b['avg_shipping_days']:.2f} | {a['avg_shipping_days']:.2f} | {a['avg_shipping_days'] - b['avg_shipping_days']:+.2f} |",
+        ])
+
+    hdr = "| KPI | Baseline window | Anomaly window | Delta |\n|-----|----------------:|---------------:|------:|"
+    kp, ks = stats["knobs"]["primary"], stats["knobs"]["secondary"]
+    return f"""<!-- AUTO-GENERATED by scripts/generate_dataset.py (seed {seed}). Do not edit by hand. -->
+# InsightForge AI - Business Anomaly Ground Truth
+
+> Phase 5 deliverable (spec Phase 12). The planted, documented anomaly used to
+> validate change detection, anomaly fusion, root-cause analysis and business
+> impact (spec Phases 33-46). Regenerate with:
+>
+> ```
+> python scripts/generate_dataset.py --rows {counts['clean_rows']} --seed {seed}
+> ```
+
+## Segment
+
+`{sl['region']} -> {sl['category']} -> {sl['subcategory']}` is the **epicentre**
+(primary tier). The rest of `{sl['region']} -> {sl['category']}` carries a lighter
+drag (secondary tier) so the Region and Category roll-ups also move and RCA has a
+`Region -> Category -> Sub_Category -> Product` drill-down path.
+
+## Period
+
+- **Anomaly window**: `{w['start']}` .. `{w['end']}` ({w['days']} days)
+- **Baseline window** (expected / comparison): `{bw['start']}` .. `{bw['end']}` ({bw['days']} days)
+
+Both aggregates below are measured on the delivered dataset; the baseline window
+is untouched by injection.
+
+## Effect knobs
+
+| Tier | drop_frac | discount_add | return_rate_add | shipping_add | shipping_clip |
+|------|----------:|-------------:|----------------:|-------------:|--------------:|
+| primary (Laptop) | {kp['drop_frac']} | {kp['discount_add']} | {kp['return_rate_add']} | {kp['shipping_add']} | {kp['shipping_clip']} |
+| secondary (non-Laptop) | {ks['drop_frac']} | {ks['discount_add']} | {ks['return_rate_add']} | {ks['shipping_add']} | {ks['shipping_clip']} |
+
+Rows dropped in-window: primary {stats['rows_dropped'].get('primary', 0)},
+secondary {stats['rows_dropped'].get('secondary', 0)},
+total {stats['rows_dropped'].get('total', 0)}.
+
+## Realised deltas
+
+### Primary tier - {sl['region']} / {sl['category']} / {sl['subcategory']}
+
+{hdr}
+{_delta_rows('primary')}
+
+### Secondary tier - {sl['region']} / {sl['category']} / non-{sl['subcategory']}
+
+{hdr}
+{_delta_rows('secondary')}
+
+### Whole business (macro - the anomaly is largely masked at this level)
+
+{hdr}
+{_delta_rows('macro')}
+
+## Expected downstream findings
+
+- **Change detection**: Revenue and Orders down, Returns / Discount / Shipping
+  days up for `{sl['region']}` / `{sl['category']}` in the anomaly window.
+- **Anomaly detection**: daily `{sl['region']}`-`{sl['category']}` KPI series flag
+  in the window.
+- **Root cause**: drill-down resolves to `{sl['subcategory']}` as the leaf driver.
+- **Business impact**: negative revenue / profit contribution concentrated in the
+  primary tier.
+"""
+
+
+def summarise_delivery(result: "DeliveryResult") -> str:
+    c = result.counts
+    lines = [
+        f"clean rows                  : {c['clean_rows']:,}",
+        f"delivered rows              : {c['delivered_rows']:,}",
+        f"issue-log rows              : {c['issue_rows']:,}",
+        f"corruption (distinct rows)  : {c['corruption_pct']:.2f}%",
+    ]
+    log = result.issue_log
+    if len(log):
+        by_type = log.groupby("issue_type").size()
+        for kind, _, _ in DQ_ISSUE_PLAN:
+            lines.append(f"  {kind:<20}: {int(by_type.get(kind, 0)):,}")
+    st = result.anomaly_stats
+    if st:
+        b, a = st["primary"]["baseline"], st["primary"]["anomaly"]
+        sl = st["slice"]
+        lines += [
+            f"anomaly primary slice ({sl['region']}/{sl['category']}/{sl['subcategory']}), "
+            f"{st['baseline_window']['start']}..{st['baseline_window']['end']} vs "
+            f"{st['window']['start']}..{st['window']['end']}:",
+            f"  orders        {b['orders']:>7,} -> {a['orders']:>7,}",
+            f"  revenue (INR) {b['revenue']:>15,.0f} -> {a['revenue']:>15,.0f}",
+            f"  avg discount  {b['avg_discount']:.3f} -> {a['avg_discount']:.3f}",
+            f"  return rate   {b['return_rate']:.1%} -> {a['return_rate']:.1%}",
+            f"  avg shipping  {b['avg_shipping_days']:.2f} -> {a['avg_shipping_days']:.2f}",
+        ]
+    return "\n".join(lines)
+
+
 def summarise(df: pd.DataFrame) -> str:
     dates = pd.to_datetime(df["Order_Date"])
     prod_rev = df.groupby("Product_ID")["Revenue"].sum().sort_values(ascending=False)
@@ -645,13 +1135,23 @@ def summarise(df: pd.DataFrame) -> str:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="generate_dataset.py",
-        description="InsightForge AI - retail data generator (Phases 2-4)",
+        description="InsightForge AI - retail data generator (Phases 2-5)",
     )
     p.add_argument("--rows", type=int, default=DEFAULT_ROWS)
     p.add_argument("--seed", type=int, default=DEFAULT_SEED)
     p.add_argument("--start", type=dt.date.fromisoformat, default=DEFAULT_START)
     p.add_argument("--end", type=dt.date.fromisoformat, default=DEFAULT_END)
     p.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    p.add_argument("--issue-log", type=Path, default=DEFAULT_ISSUE_LOG,
+                   help="where to write the data-quality issue log (delivery mode)")
+    p.add_argument("--ground-truth", type=Path, default=DEFAULT_GROUND_TRUTH,
+                   help="where to write the anomaly ground-truth doc (delivery mode)")
+    p.add_argument("--clean", action="store_true",
+                   help="skip all Phase 5 injection; write the pristine dataset")
+    p.add_argument("--no-anomaly", action="store_true",
+                   help="delivery mode without the business anomaly")
+    p.add_argument("--no-issues", action="store_true",
+                   help="delivery mode without the data-quality issues")
     return p
 
 
@@ -659,13 +1159,32 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     print("InsightForge AI - retail data generator")
     print("=" * 40)
-    df = generate_dataset(
-        rows=args.rows, seed=args.seed, start=args.start, end=args.end
+
+    if args.clean:
+        df = generate_dataset(
+            rows=args.rows, seed=args.seed, start=args.start, end=args.end
+        )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(args.output, index=False, date_format="%Y-%m-%d")
+        print(summarise(df))
+        print(f"\n[ok] wrote {len(df):,} clean rows -> {args.output}")
+        return 0
+
+    result = build_delivery_dataset(
+        rows=args.rows, seed=args.seed, start=args.start, end=args.end,
+        inject_issues=not args.no_issues, inject_anomaly=not args.no_anomaly,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(args.output, index=False, date_format="%Y-%m-%d")
-    print(summarise(df))
-    print(f"\n[ok] wrote {len(df):,} rows -> {args.output}")
+    result.delivery_df.to_csv(args.output, index=False, date_format="%Y-%m-%d")
+    result.issue_log.to_csv(args.issue_log, index=False)
+    print(summarise_delivery(result))
+    print(f"\n[ok] wrote {result.counts['delivered_rows']:,} delivery rows -> {args.output}")
+    print(f"[ok] wrote {result.counts['issue_rows']:,} issue-log rows -> {args.issue_log}")
+    if result.anomaly_stats:
+        md = anomaly_ground_truth_markdown(result.anomaly_stats, result.counts, seed=args.seed)
+        args.ground_truth.parent.mkdir(parents=True, exist_ok=True)
+        args.ground_truth.write_text(md, encoding="utf-8")
+        print(f"[ok] wrote anomaly ground truth -> {args.ground_truth}")
     return 0
 
 

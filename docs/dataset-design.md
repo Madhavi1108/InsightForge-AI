@@ -109,16 +109,56 @@ run.
 `cost_ratio` live only on the generator's reference tables. `validate_consistency`
 asserts none of them reach the dataset - the CSV is exactly the 22 fields above.
 
-## Controlled imperfections (spec Phases 11-12, generated later)
+## Controlled imperfections (spec Phases 11-12)
 
-- **Bad data (reproducible)**: NULLs, duplicate rows, invalid dates, negative
-  quantities, discounts `<0` or `>1`, unknown `Customer_ID` / `Category`, extreme
-  prices, inconsistent text casing.
-- **Business anomaly (documented ground truth)**: for a selected period,
-  `West -> Electronics -> Laptop`: Orders down, Revenue down, Returns up,
-  Shipping_Days up, Discount up. Recorded in `docs/anomaly-ground-truth.md` when
-  the generator is built (new Phase 5) and used to validate anomaly detection and
-  RCA.
+`generate_dataset()` returns the **clean, validated** frame. Phase 5 layers two
+deterministic injectors on top to build the *delivery* dataset the pipeline
+actually ingests (`build_delivery_dataset()`):
+
+1. `inject_business_anomaly()` - the planted anomaly (below).
+2. `inject_data_quality_issues()` - the bad-data taxonomy (below).
+
+Both use child RNGs (`seed + 1`, `seed + 2`) so the clean generator's stream is
+untouched and every existing invariant test still passes. The CLI writes the
+delivery dataset by default; `--clean` (also `--no-anomaly` / `--no-issues`)
+restores the pristine file.
+
+### Data-quality injection (spec Phase 11)
+
+A small disjoint set of rows (~1.2% at 150k) is corrupted, each defect recorded
+in an **issue log** (`data/full_dataset_issues.csv`, columns
+`Order_ID, row_pos, issue_type, dq_dimension, detail`) that is the ground truth
+for the Phase 14 data-quality engine. `Revenue` / `Profit` are **not** re-derived
+after corruption, so a bad `Quantity` / `Unit_Price` / `Discount` also carries a
+deliberate Consistency defect. Counts scale linearly with the row count.
+
+| `issue_type` | DQ dimension | count @150k | how |
+|--------------|--------------|------------:|-----|
+| `null_mandatory` | Completeness | 400 | a mandatory cell (`Customer_ID`, `City`, `Quantity`, …) set to NULL |
+| `duplicate_row` | Uniqueness | 250 | verbatim row copies appended (same `Order_ID`) |
+| `invalid_date` | Timeliness | 150 | `"2026-13-40"`, `"31/02/2026"`, `"2027-06-01"` (future), `""` |
+| `negative_quantity` | Validity | 150 | `Quantity` set to `0`, `-1`, `-3` |
+| `invalid_discount` | Validity | 150 | `Discount` set to `-0.10`, `1.50`, `2.0` |
+| `unknown_customer_id` | Referential Integrity | 120 | `Customer_ID` set to `CUST-999999`, `UNKNOWN`, `cust-abc` |
+| `invalid_category` | Referential Integrity | 120 | `Category` set to `Gadgets`, `misc`, `ELECTRONICS!!` |
+| `extreme_price` | Accuracy | 120 | `Unit_Price` set to `0.0`, `99_999_999.0`, `-500.0` |
+| `inconsistent_text` | Consistency | 300 | case / whitespace noise on `Customer_Segment` / `Region` / `Payment_Method` |
+
+### Business anomaly (documented ground truth) (spec Phase 12)
+
+Planted over `2026-08-01 .. 2026-09-08`, two tiers:
+
+- **Primary** (`West -> Electronics -> Laptop`, the RCA leaf): drop 55% of orders,
+  `Discount +0.20`, `+30 pp` returns, `Shipping_Days +10`.
+- **Secondary** (`West -> Electronics`, non-Laptop): drop 18%, `Discount +0.05`,
+  `+6 pp` returns, `Shipping_Days +3` - so the Region and Category roll-ups also
+  move.
+
+Anomaly rows stay internally consistent (Revenue / Profit re-derived) - they are
+*abnormal but valid*, not bad data. The realised before/after deltas (anomaly
+window vs the preceding 39-day baseline window, per tier + whole-business) are
+written to [`anomaly-ground-truth.md`](anomaly-ground-truth.md) on every run and
+consumed by the change-detection / anomaly / RCA / impact phases (spec 33-46).
 
 ## Daily files (spec Phase 13)
 
@@ -128,17 +168,19 @@ The full dataset is split by `Order_Date` into `data/incoming/sales_YYYY_MM_DD.c
 
 ## Generator
 
-`scripts/generate_dataset.py` (new Phases 2-4) produces the **clean baseline**
-dataset: 150,000 internally consistent rows over 2026-01-01..2026-09-08, written to
-`data/full_dataset.csv` (git-ignored). It is deterministic for a given `--seed`
-(default `20260909`) and enforces the derived-field rules above via
-`validate_consistency()`. Phase 3 adds weighted realism - product `appeal`,
-repeat-customer `purchase_weight`, segment-driven basket/discount, and
-metro-weighted city demand - on top of that baseline. Phase 4 adds the
-seasonality engine (weekend / month-end / festive / annual-curve demand
-weighting). Controlled imperfections, the injected anomaly, and the daily-file
-split are added by later phases (Phases 5-6).
+`scripts/generate_dataset.py` (new Phases 2-5) produces the retail dataset.
+`generate_dataset()` builds the **clean baseline**: 150,000 internally consistent
+rows over 2026-01-01..2026-09-08, deterministic for a given `--seed` (default
+`20260909`), enforcing the derived-field rules above via `validate_consistency()`.
+Phase 3 adds weighted realism (product `appeal`, repeat-customer
+`purchase_weight`, segment-driven basket/discount, metro-weighted city demand);
+Phase 4 adds the seasonality engine (weekend / month-end / festive / annual-curve
+demand weighting); Phase 5 adds `build_delivery_dataset()`, which layers the
+controlled imperfections + planted anomaly above and writes the dirty
+`data/full_dataset.csv`, the issue log `data/full_dataset_issues.csv` (both
+git-ignored), and `docs/anomaly-ground-truth.md`. The daily-file split is Phase 6.
 
 ```
-python scripts/generate_dataset.py --rows 150000 --seed 20260909
+python scripts/generate_dataset.py --rows 150000 --seed 20260909   # delivery (dirty) dataset
+python scripts/generate_dataset.py --clean                          # pristine baseline
 ```
