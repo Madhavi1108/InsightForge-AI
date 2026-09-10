@@ -49,9 +49,15 @@ deterministic from ``--seed`` (child generators ``seed + 1`` / ``seed + 2``). Th
 CLI writes the delivery dataset by default; ``--clean`` restores the pristine
 file.
 
-Deferred to later phases (see ``docs/PHASE_MAP.md``):
-
-* split into ``data/incoming/sales_YYYY_MM_DD.csv`` -- Phase 6
+Phase 6 (spec Phase 13) adds the **daily file split & `data/` lifecycle
+directories**: :func:`split_daily_files` fans the delivery frame out into
+``data/incoming/sales_YYYY_MM_DD.csv`` (one file per calendar day),
+:func:`ensure_lifecycle_dirs` creates the five pipeline-lifecycle directories
+(``incoming``, ``raw``, ``processed``, ``rejected``, ``archive``) that later
+phases' ingestion/ETL stages read from and write to, and :func:`generate_demo_day`
+builds the held-out ``data/sales_2026_09_09.csv`` used for the final
+end-to-end demo (kept out of ``data/incoming/`` until it is manually dropped
+in).
 
 Usage
 -----
@@ -59,6 +65,7 @@ Usage
     python scripts/generate_dataset.py --rows 150000 --seed 20260909 \
         --start 2026-01-01 --end 2026-09-08 --output data/full_dataset.csv
     python scripts/generate_dataset.py --clean      # pristine, no injection
+    python scripts/generate_dataset.py --no-daily-split  # skip Phase 6 split
 """
 from __future__ import annotations
 
@@ -94,6 +101,15 @@ DEFAULT_ROWS = 150_000
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "full_dataset.csv"
 DEFAULT_ISSUE_LOG = PROJECT_ROOT / "data" / "full_dataset_issues.csv"
 DEFAULT_GROUND_TRUTH = PROJECT_ROOT / "docs" / "anomaly-ground-truth.md"
+
+# --------------------------------------------------------------------------- #
+# Daily files & data/ lifecycle directories (spec Phase 13)
+# --------------------------------------------------------------------------- #
+LIFECYCLE_DIRS = ("incoming", "raw", "processed", "rejected", "archive")
+DEFAULT_DAILY_DIR = PROJECT_ROOT / "data" / "incoming"
+DEMO_DAY = dt.date(2026, 9, 9)
+DEFAULT_DEMO_DAY_OUTPUT = PROJECT_ROOT / "data" / f"sales_{DEMO_DAY:%Y_%m_%d}.csv"
+INVALID_DATE_FILENAME = "sales_invalid_date.csv"
 
 # --------------------------------------------------------------------------- #
 # Reference data
@@ -973,6 +989,86 @@ def build_delivery_dataset(
     return DeliveryResult(clean, df, issue_log, anomaly_stats, counts)
 
 
+def ensure_lifecycle_dirs(data_dir: Path = PROJECT_ROOT / "data") -> list[Path]:
+    """Create the five pipeline-lifecycle directories under ``data_dir`` (spec Phase 13).
+
+    Idempotent: safe to call on every generator run. Each directory gets a
+    ``.gitkeep`` so it survives even when its generated contents are git-ignored
+    (see ``.gitignore``: ``data/<name>/*`` is ignored, ``!data/**/.gitkeep`` is not).
+    """
+    created = []
+    for name in LIFECYCLE_DIRS:
+        d = data_dir / name
+        d.mkdir(parents=True, exist_ok=True)
+        keep = d / ".gitkeep"
+        if not keep.exists():
+            keep.touch()
+        created.append(d)
+    return created
+
+
+def split_daily_files(df: pd.DataFrame, output_dir: Path) -> list[Path]:
+    """Split ``df`` by calendar ``Order_Date`` into ``sales_YYYY_MM_DD.csv`` files.
+
+    One file per distinct day, written to ``output_dir`` with the full
+    :data:`COLUMNS` header, row order preserved within each day. Rows whose
+    ``Order_Date`` does not parse to a real calendar date (a possible Phase 5
+    ``invalid_date`` defect) are **not dropped**: design principle 5 ("invalid
+    data is traceable, never silently dropped") - they are written to a fixed
+    ``sales_invalid_date.csv`` instead. Deterministic given ``df``: no RNG use.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    parsed = pd.to_datetime(df["Order_Date"], errors="coerce")
+    written: list[Path] = []
+
+    invalid = df.loc[parsed.isna()]
+    if len(invalid):
+        path = output_dir / INVALID_DATE_FILENAME
+        invalid.to_csv(path, index=False)
+        written.append(path)
+
+    valid_df = df.loc[parsed.notna()]
+    valid_dates = parsed.loc[parsed.notna()].dt.date
+    for day, day_df in valid_df.groupby(valid_dates, sort=True):
+        path = output_dir / f"sales_{day:%Y_%m_%d}.csv"
+        day_df.to_csv(path, index=False, date_format="%Y-%m-%d")
+        written.append(path)
+
+    return written
+
+
+def generate_demo_day(
+    seed: int = DEFAULT_SEED,
+    rows: int = DEFAULT_ROWS,
+    avg_daily_rows: int | None = None,
+    day: dt.date = DEMO_DAY,
+) -> pd.DataFrame:
+    """Build the held-out demo day (spec Phase 13 / ``docs/PHASE_MAP.md`` killer demo).
+
+    Reconstructs the *same* customer/product/geo reference tables the main
+    ``rows``/``seed`` dataset uses (deterministic given ``seed``), then draws one
+    day of clean orders for ``day`` with an independent child RNG (``seed + 3`` -
+    ``seed + 1``/``seed + 2`` are already used by the anomaly/DQ injectors), so
+    ``Customer_ID``/``Product_ID`` values stay referentially consistent with the
+    main dataset. The result is a fresh, clean day - no anomaly, no injected
+    defects - validated with the same :func:`validate_consistency` contract as
+    the main baseline.
+    """
+    n_days_main = (DEFAULT_END - DEFAULT_START).days + 1
+    n_rows = avg_daily_rows if avg_daily_rows is not None else round(rows / n_days_main)
+    n_rows = max(1, n_rows)
+
+    ref_rng = np.random.default_rng(seed)
+    customers, products, geo = build_reference_data(
+        ref_rng, _n_customers(rows), _n_products(rows)
+    )
+    day_rng = np.random.default_rng(seed + 3)
+    orders = generate_orders(day_rng, n_rows, customers, products, geo, day, day)
+    df = apply_business_model(orders)
+    validate_consistency(df, customers, products)
+    return df.reset_index(drop=True)
+
+
 def anomaly_ground_truth_markdown(stats: dict, counts: dict, seed: int = DEFAULT_SEED) -> str:
     """Render ``docs/anomaly-ground-truth.md`` from realised anomaly stats."""
     sl = stats["slice"]
@@ -1135,7 +1231,7 @@ def summarise(df: pd.DataFrame) -> str:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="generate_dataset.py",
-        description="InsightForge AI - retail data generator (Phases 2-5)",
+        description="InsightForge AI - retail data generator (Phases 2-6)",
     )
     p.add_argument("--rows", type=int, default=DEFAULT_ROWS)
     p.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -1152,6 +1248,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="delivery mode without the business anomaly")
     p.add_argument("--no-issues", action="store_true",
                    help="delivery mode without the data-quality issues")
+    p.add_argument("--daily-dir", type=Path, default=DEFAULT_DAILY_DIR,
+                   help="directory for the Phase 6 daily sales_YYYY_MM_DD.csv split")
+    p.add_argument("--demo-day-output", type=Path, default=DEFAULT_DEMO_DAY_OUTPUT,
+                   help="where to write the held-out demo-day CSV (delivery mode)")
+    p.add_argument("--no-daily-split", action="store_true",
+                   help="skip the Phase 6 daily split, lifecycle dirs & demo day")
     return p
 
 
@@ -1168,6 +1270,10 @@ def main(argv: list[str] | None = None) -> int:
         df.to_csv(args.output, index=False, date_format="%Y-%m-%d")
         print(summarise(df))
         print(f"\n[ok] wrote {len(df):,} clean rows -> {args.output}")
+        if not args.no_daily_split:
+            ensure_lifecycle_dirs(args.output.parent)
+            daily = split_daily_files(df, args.daily_dir)
+            print(f"[ok] wrote {len(daily):,} daily files -> {args.daily_dir}")
         return 0
 
     result = build_delivery_dataset(
@@ -1185,6 +1291,19 @@ def main(argv: list[str] | None = None) -> int:
         args.ground_truth.parent.mkdir(parents=True, exist_ok=True)
         args.ground_truth.write_text(md, encoding="utf-8")
         print(f"[ok] wrote anomaly ground truth -> {args.ground_truth}")
+
+    if not args.no_daily_split:
+        ensure_lifecycle_dirs(args.output.parent)
+        daily = split_daily_files(result.delivery_df, args.daily_dir)
+        print(f"[ok] wrote {len(daily):,} daily files -> {args.daily_dir}")
+
+        demo_df = generate_demo_day(seed=args.seed, rows=args.rows)
+        args.demo_day_output.parent.mkdir(parents=True, exist_ok=True)
+        demo_df.to_csv(args.demo_day_output, index=False, date_format="%Y-%m-%d")
+        print(
+            f"[ok] wrote {len(demo_df):,}-row demo day -> {args.demo_day_output} "
+            "(held out of data/incoming/ for the final end-to-end demo)"
+        )
     return 0
 
 

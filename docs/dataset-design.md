@@ -166,6 +166,18 @@ The full dataset is split by `Order_Date` into `data/incoming/sales_YYYY_MM_DD.c
 (e.g. `sales_2026_08_01.csv` ... `sales_2026_09_08.csv`), plus a held-out
 `sales_2026_09_09.csv` for the final end-to-end demo.
 
+Implemented in `scripts/generate_dataset.py`: `split_daily_files()` groups the
+delivery frame by calendar `Order_Date` and writes one CSV per day (rows with an
+unparseable `Order_Date` - a possible Phase 5 defect - go to
+`data/incoming/sales_invalid_date.csv` rather than being dropped);
+`generate_demo_day()` reconstructs the same seed's customer/product reference
+tables and draws an independent (`seed + 3`) day of clean orders for
+`2026-09-09`, written to `data/sales_2026_09_09.csv` - deliberately outside
+`data/incoming/` until it is dropped in for the killer demo.
+`ensure_lifecycle_dirs()` creates the five pipeline directories
+(`data/{incoming,raw,processed,rejected,archive}/`) that later phases read from
+and write to.
+
 ## Generator
 
 `scripts/generate_dataset.py` (new Phases 2-5) produces the retail dataset.
@@ -178,7 +190,8 @@ Phase 4 adds the seasonality engine (weekend / month-end / festive / annual-curv
 demand weighting); Phase 5 adds `build_delivery_dataset()`, which layers the
 controlled imperfections + planted anomaly above and writes the dirty
 `data/full_dataset.csv`, the issue log `data/full_dataset_issues.csv` (both
-git-ignored), and `docs/anomaly-ground-truth.md`. The daily-file split is Phase 6.
+git-ignored), and `docs/anomaly-ground-truth.md`. Phase 6 adds the daily-file
+split, lifecycle directories and held-out demo day (above).
 
 ```
 python scripts/generate_dataset.py --rows 150000 --seed 20260909   # delivery (dirty) dataset
