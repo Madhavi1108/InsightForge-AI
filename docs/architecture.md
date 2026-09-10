@@ -118,6 +118,7 @@ data is always still in `data/archive/`.
 - [`data-flow.md`](data-flow.md) - end-to-end data lifecycle and DB tables
 - [`database-setup.md`](database-setup.md) - PostgreSQL provisioning (Docker) & `.env` wiring
 - [`database-schema.md`](database-schema.md) - star schema, operational tables, indexes & lineage
+- [`database-layer.md`](database-layer.md) - `src/database.py` API, pooling, retry policy & error taxonomy
 - [`security.md`](security.md) - secrets, SQL safety, AI safety, auditability
 - [`requirements.md`](requirements.md) - functional & non-functional requirements
 - [`business-questions.md`](business-questions.md) - questions the system answers

@@ -78,7 +78,8 @@ from insight back to source file.
 - The orchestrator (`src/orchestrator.py`, new Phase 10) owns sequencing; a stage
   never calls the next stage directly.
 - All database access goes through `src/database.py` (parameterised queries,
-  transactions, retries).
+  transactions, retries) - the `Database` facade, contract in
+  [`database-layer.md`](database-layer.md).
 - The tables above are defined in `sql/schema.sql` (Phase 8); see
   [`database-schema.md`](database-schema.md) for columns, relationships and
   indexes.

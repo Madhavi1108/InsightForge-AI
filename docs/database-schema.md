@@ -161,6 +161,7 @@ $env:INSIGHTFORGE_PG_INTEGRATION = "1"; pytest -q tests/test_phase08_schema.py
 ## 7. Related documents
 
 - [`database-setup.md`](database-setup.md) - PostgreSQL provisioning
+- [`database-layer.md`](database-layer.md) - `src/database.py`, how the app reads/writes these tables
 - [`data-flow.md`](data-flow.md) - which stage writes which table
 - [`system-components.md`](system-components.md) - "Storage" component contract
 - [`dataset-design.md`](dataset-design.md) - the 22 source fields

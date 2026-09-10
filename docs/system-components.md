@@ -84,11 +84,20 @@
 - **Indexes**: the six spec-named `fact_sales` indexes (`order_id`, `order_date`,
   `customer_id`, `product_id`, `region`, `category`) plus FK, composite
   `(region, category, order_date)`, and operational-table indexes.
-- **`src/database.py`** (new Phase 9): connection management, pooling,
-  transactions, retries with backoff, parameterised query execution, error
-  handling. Every other component reaches the database only through this module.
-- **Failure behaviour**: connection failure -> up to 3 retries; then raises a
-  typed error the orchestrator records as run `FAILED`.
+- **`src/database.py`** (Phase 9 - **delivered**): pooled SQLAlchemy `Engine`
+  (`get_engine()` / `dispose_engine()`, lazy - import opens no connection) and a
+  `Database` facade: `fetch_all` / `fetch_one` / `scalar` (reads),
+  `execute` / `execute_many` / `insert_returning` (writes, each in its own
+  transaction), `transaction()` context manager, `ping()` / `healthcheck()`.
+  Every statement goes through `sqlalchemy.text()` with bound parameters. Full
+  contract in [`database-layer.md`](database-layer.md). Every other component
+  reaches the database only through this module (the sole exception is
+  `scripts/apply_schema.py`, raw psycopg2, DDL only).
+- **Failure behaviour**: transient connection failures (`OperationalError`,
+  `InterfaceError`, invalidated connection) retry up to `DB_MAX_RETRIES` (3) with
+  exponential backoff, then raise `DatabaseConnectionError`; non-transient errors
+  raise `QueryExecutionError` immediately. Both are sanitised (no SQL, params,
+  DSN, host, or stack trace) and recorded by the orchestrator as run `FAILED`.
 
 ## Analytics
 
