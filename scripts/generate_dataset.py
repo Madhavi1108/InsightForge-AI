@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""InsightForge AI - retail data generator (spec Phases 5-9).
+"""InsightForge AI - retail data generator (spec Phases 5-10).
 
 Produces a **clean, internally consistent** retail order dataset that matches
 ``docs/dataset-design.md``: 22 fields, valid Region->State->City and
@@ -19,9 +19,18 @@ discount, and an expanded metro-weighted Indian geography. The internal weight
 columns (``appeal``, ``purchase_weight``, ``is_repeat``, ``city_weight``) live
 only on the reference tables and never reach the 22-field CSV.
 
+Phase 4 (spec Phase 10) adds a **seasonality engine**: a deterministic per-date
+demand weighting (:func:`day_seasonality_weights`) combining weekend uplift,
+month-end effects, curated festive-sale windows, and a smooth annual demand
+curve. It only reshapes how many orders land on each ``Order_Date`` -- no
+row-level field (discount, quantity, price, returns, shipping) changes, and the
+weights are mean-normalised so total expected volume is unchanged. The festive
+dates in ``FESTIVE_PERIODS`` are curated / approximate shopping-sale windows, not
+astronomically exact festival dates; the requirement is documented, reproducible
+logic.
+
 Deferred to later phases (see ``docs/PHASE_MAP.md``):
 
-* weekend / month-end / festive / seasonal demand -- Phase 4
 * NULLs, duplicates, invalid values, the injected business anomaly -- Phase 5
 * split into ``data/incoming/sales_YYYY_MM_DD.csv`` -- Phase 6
 
@@ -34,6 +43,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import calendar
 import datetime as dt
 import sys
 from pathlib import Path
@@ -197,6 +207,38 @@ SEGMENT_DISCOUNT_WEIGHTS = {
     "Home Office": np.array([0.32, 0.22, 0.18, 0.13, 0.09, 0.04, 0.02]),
 }
 
+# --------------------------------------------------------------------------- #
+# Seasonality engine (spec Phase 10)
+# --------------------------------------------------------------------------- #
+# A deterministic per-date demand multiplier reshapes how many orders fall on
+# each Order_Date. Four independent effects are multiplied together and the
+# resulting vector is mean-normalised, so only the *distribution* of dates
+# changes - never a row-level field or the total row count.
+#
+# 1. Weekends: consumer e-commerce demand is higher on Saturday / Sunday.
+WEEKEND_UPLIFT = 1.25
+# 2. Month-end: the last MONTH_END_DAYS calendar days of every month see a
+#    payday / month-end-target push.
+MONTH_END_DAYS = 3
+MONTH_END_UPLIFT = 1.20
+# 3. Festive periods: curated Indian shopping-sale windows (name, start, end,
+#    multiplier). Dates are approximate / illustrative, not astronomically exact;
+#    overlapping windows take the max multiplier (they do not compound).
+FESTIVE_PERIODS: list[tuple[str, str, str, float]] = [
+    ("Republic Day sale", "2026-01-20", "2026-01-27", 1.35),
+    ("Holi", "2026-03-01", "2026-03-04", 1.20),
+    ("Financial year-end sale", "2026-03-25", "2026-03-31", 1.30),
+    ("Akshaya Tritiya", "2026-04-20", "2026-04-22", 1.15),
+    ("Independence Day sale", "2026-08-08", "2026-08-17", 1.45),
+    ("Raksha Bandhan", "2026-08-26", "2026-08-29", 1.20),
+]
+# 4. Seasonal demand: a smooth annual curve 1 + A * cos(2*pi*(doy - peak)/365.25).
+#    The peak sits in mid-November (SEASONAL_PEAK_DOY, outside the generation
+#    window) and the trough in mid-May, so across the window demand sags through
+#    late spring and then climbs into the Oct-Nov Indian festive quarter.
+SEASONAL_AMPLITUDE = 0.15
+SEASONAL_PEAK_DOY = 315
+
 FIRST_NAMES = [
     "Aarav", "Vivaan", "Aditya", "Vihaan", "Arjun", "Sai", "Reyansh", "Krishna",
     "Ishaan", "Rohan", "Ananya", "Diya", "Aadhya", "Isha", "Kavya", "Anika",
@@ -270,6 +312,51 @@ def _n_customers(rows: int) -> int:
 
 def _n_products(rows: int) -> int:
     return max(80, rows // 500)
+
+
+def day_seasonality_weights(start: dt.date, end: dt.date) -> np.ndarray:
+    """Per-date demand multipliers for every day in ``[start, end]`` (spec Phase 10).
+
+    Combines four independent effects - weekend uplift, month-end uplift, curated
+    festive-sale windows, and a smooth annual demand curve - by multiplication,
+    then mean-normalises the result to ``1.0`` so the total expected order volume
+    is unchanged and the seasonality is purely redistributive. Pure and
+    deterministic: no RNG, depends only on the calendar.
+    """
+    n_days = (end - start).days + 1
+    if n_days < 1:
+        raise ValueError("end date must not precede start date")
+
+    festive = [
+        (dt.date.fromisoformat(s), dt.date.fromisoformat(e), float(m))
+        for _, s, e, m in FESTIVE_PERIODS
+    ]
+
+    weights = np.empty(n_days, dtype=float)
+    for i in range(n_days):
+        day = start + dt.timedelta(days=i)
+
+        factor = 1.0
+        if day.weekday() >= 5:  # Saturday=5, Sunday=6
+            factor *= WEEKEND_UPLIFT
+
+        days_in_month = calendar.monthrange(day.year, day.month)[1]
+        if day.day > days_in_month - MONTH_END_DAYS:
+            factor *= MONTH_END_UPLIFT
+
+        festive_mult = max(
+            (m for lo, hi, m in festive if lo <= day <= hi), default=1.0
+        )
+        factor *= festive_mult
+
+        doy = day.timetuple().tm_yday
+        factor *= 1.0 + SEASONAL_AMPLITUDE * np.cos(
+            2.0 * np.pi * (doy - SEASONAL_PEAK_DOY) / 365.25
+        )
+
+        weights[i] = factor
+
+    return weights / weights.mean()
 
 
 # --------------------------------------------------------------------------- #
@@ -373,7 +460,11 @@ def generate_orders(
     geo_idx = rng.choice(
         len(geo), size=n_rows, p=_p(geo["city_weight"].to_numpy())
     )
-    day_offset = rng.integers(0, n_days, n_rows)
+    # Seasonality engine (spec Phase 10): dates are drawn in proportion to a
+    # deterministic per-day demand multiplier rather than uniformly.
+    day_offset = rng.choice(
+        n_days, size=n_rows, p=_p(day_seasonality_weights(start, end))
+    )
 
     order_date = np.datetime64(start) + day_offset.astype("timedelta64[D]")
 
@@ -516,6 +607,19 @@ def summarise(df: pd.DataFrame) -> str:
     top_5pct = max(1, len(order_counts) // 20)
     cust_share = order_counts.head(top_5pct).sum() / len(df)
     metro_share = df["City"].isin(METRO_CITIES).mean()
+
+    per_day = dates.dt.date.value_counts()
+    weekend_days = {d for d in per_day.index if d.weekday() >= 5}
+    weekend_rate = per_day[[d in weekend_days for d in per_day.index]].mean()
+    weekday_rate = per_day[[d not in weekend_days for d in per_day.index]].mean()
+    festive_days = {
+        lo + dt.timedelta(days=k)
+        for _, s, e, _ in FESTIVE_PERIODS
+        for lo, hi in [(dt.date.fromisoformat(s), dt.date.fromisoformat(e))]
+        for k in range((hi - lo).days + 1)
+    }
+    festive_share = dates.dt.date.isin(festive_days).mean()
+
     lines = [
         f"rows                        : {len(df):,}",
         f"date span                   : {dates.min().date()} .. {dates.max().date()}",
@@ -528,6 +632,8 @@ def summarise(df: pd.DataFrame) -> str:
         f"busiest customer orders     : {int(order_counts.iloc[0])}",
         f"orders from top-5% customers: {cust_share:.2%}",
         f"metro-city order share      : {metro_share:.2%}",
+        f"orders/day weekend vs weekday: {weekend_rate:,.0f} vs {weekday_rate:,.0f}",
+        f"festive-window order share  : {festive_share:.2%}",
         f"mandatory nulls             : {int(df[MANDATORY_COLUMNS].isna().sum().sum())}",
         f"shipping_days nulls         : {int(df['Shipping_Days'].isna().sum())} "
         f"(Pending/Cancelled)",
@@ -539,7 +645,7 @@ def summarise(df: pd.DataFrame) -> str:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="generate_dataset.py",
-        description="InsightForge AI - retail data generator (Phases 2-3)",
+        description="InsightForge AI - retail data generator (Phases 2-4)",
     )
     p.add_argument("--rows", type=int, default=DEFAULT_ROWS)
     p.add_argument("--seed", type=int, default=DEFAULT_SEED)

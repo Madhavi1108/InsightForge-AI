@@ -80,6 +80,29 @@ selected in proportion to it, producing Pareto-like revenue concentration
 unchanged (5 categories, same sub-categories); "products behave differently" is
 realised through `appeal` dispersion, not new fields.
 
+## Seasonality model (spec Phase 10)
+
+The generator does **not** spread orders uniformly across the date window. A pure,
+deterministic helper `day_seasonality_weights(start, end)` produces one demand
+multiplier per calendar date, and `generate_orders` draws each order's
+`Order_Date` in proportion to it (`rng.choice(n_days, p=...)`). Only the
+**distribution of `Order_Date`** changes - no row-level field (Quantity, Discount,
+Unit_Price, returns, shipping) and no total-row-count change. The multiplier is
+the product of four independent effects, and the whole vector is mean-normalised
+to `1.0` so expected volume is unchanged:
+
+| Effect | Constant(s) | Rule |
+|--------|-------------|------|
+| **Weekends** | `WEEKEND_UPLIFT = 1.25` | Saturday / Sunday demand is 25% higher. |
+| **Month-end** | `MONTH_END_DAYS = 3`, `MONTH_END_UPLIFT = 1.20` | The last 3 calendar days of every month get a 20% payday / month-end-target push. |
+| **Festive periods** | `FESTIVE_PERIODS` | Curated Indian shopping-sale windows `(name, start, end, multiplier)`: Republic Day (×1.35), Holi (×1.20), financial-year-end (×1.30), Akshaya Tritiya (×1.15), Independence Day (×1.45), Raksha Bandhan (×1.20). Overlapping windows take the **max** multiplier - they do not compound. Dates are curated / approximate, not astronomically exact. |
+| **Seasonal demand** | `SEASONAL_AMPLITUDE = 0.15`, `SEASONAL_PEAK_DOY = 315` | Smooth annual curve `1 + A·cos(2π·(doy − peak) / 365.25)`, peaking in mid-November and troughing in mid-May: demand sags through late spring, then climbs into the Oct–Nov festive quarter. |
+
+`day_seasonality_weights` is side-effect-free and independently unit-tested
+(`tests/test_phase04_seasonality.py`); `summarise()` reports weekend-vs-weekday
+orders/day and the festive-window order share so the effect is visible on every
+run.
+
 ## Internal generator-only columns
 
 `appeal`, `purchase_weight`, `is_repeat`, `city_weight`, `base_price`,
@@ -105,15 +128,16 @@ The full dataset is split by `Order_Date` into `data/incoming/sales_YYYY_MM_DD.c
 
 ## Generator
 
-`scripts/generate_dataset.py` (new Phases 2-3) produces the **clean baseline**
+`scripts/generate_dataset.py` (new Phases 2-4) produces the **clean baseline**
 dataset: 150,000 internally consistent rows over 2026-01-01..2026-09-08, written to
 `data/full_dataset.csv` (git-ignored). It is deterministic for a given `--seed`
 (default `20260909`) and enforces the derived-field rules above via
 `validate_consistency()`. Phase 3 adds weighted realism - product `appeal`,
 repeat-customer `purchase_weight`, segment-driven basket/discount, and
-metro-weighted city demand - on top of that baseline. Controlled imperfections,
-the injected anomaly, and the daily-file split are added by later phases
-(Phases 4-6).
+metro-weighted city demand - on top of that baseline. Phase 4 adds the
+seasonality engine (weekend / month-end / festive / annual-curve demand
+weighting). Controlled imperfections, the injected anomaly, and the daily-file
+split are added by later phases (Phases 5-6).
 
 ```
 python scripts/generate_dataset.py --rows 150000 --seed 20260909
