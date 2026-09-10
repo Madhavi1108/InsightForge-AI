@@ -69,6 +69,10 @@
 ## Storage
 
 ### PostgreSQL `insightforge` (new Phase 7-9)
+- **Provisioning (Phase 7)**: `config/docker-compose.postgres.yml` (PostgreSQL 16
+  container, credentials from `.env`); runtime config assembled by
+  `src/config.py`; lifecycle helper `scripts/postgres.py`; runbook
+  [`database-setup.md`](database-setup.md).
 - **Star schema**: `fact_sales`, `dim_date`, `dim_customer`, `dim_product`,
   `dim_region`.
 - **Operational / audit tables**: `pipeline_runs`, `file_registry`,

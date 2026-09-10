@@ -1,0 +1,66 @@
+# ===========================================================================
+# InsightForge AI - PostgreSQL provisioning (Phase 7 / spec Phase 14)
+# ---------------------------------------------------------------------------
+# Brings up the PostgreSQL 16 instance that backs the whole platform. Every
+# credential is supplied from the project `.env` (template: `.env.example`) -
+# there are NO literal secrets in this file (development rule 9).
+#
+#   docker compose -f config/docker-compose.postgres.yml up -d
+#   docker compose -f config/docker-compose.postgres.yml --profile tools up -d
+#
+# See docs/database-setup.md for the full runbook. The star schema arrives in
+# Phase 8; the src/database.py connection layer in Phase 9.
+# ===========================================================================
+name: insightforge
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: insightforge-postgres
+    # `.env` lives one level up from this compose file.
+    env_file:
+      - ../.env
+    environment:
+      # The official image creates this database + role on first boot.
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - insightforge_pgdata:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # Optional web admin UI. Not started by default - opt in with:
+  #   docker compose -f config/docker-compose.postgres.yml --profile tools up -d
+  pgadmin:
+    image: dpage/pgadmin4:8.14
+    container_name: insightforge-pgadmin
+    profiles: ["tools"]
+    env_file:
+      - ../.env
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - insightforge_pgadmin:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  insightforge_pgdata:
+    name: insightforge_pgdata
+  insightforge_pgadmin:
+    name: insightforge_pgadmin
