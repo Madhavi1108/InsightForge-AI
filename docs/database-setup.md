@@ -123,6 +123,7 @@ pytest -q tests/test_phase07_postgres_config.py
 
 ## 8. Related documents
 
+- [`database-schema.md`](database-schema.md) - the schema applied on top of this instance (Phase 8)
 - [`architecture.md`](architecture.md) §6 - runtime dependencies
 - [`system-components.md`](system-components.md) - "Storage" component contract
 - [`data-flow.md`](data-flow.md) - which tables each pipeline stage touches

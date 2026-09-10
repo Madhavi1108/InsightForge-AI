@@ -73,13 +73,17 @@
   container, credentials from `.env`); runtime config assembled by
   `src/config.py`; lifecycle helper `scripts/postgres.py`; runbook
   [`database-setup.md`](database-setup.md).
-- **Star schema**: `fact_sales`, `dim_date`, `dim_customer`, `dim_product`,
-  `dim_region`.
+- **Schema (Phase 8)**: `sql/schema.sql` (idempotent DDL), applied by
+  `scripts/apply_schema.py`; every table, relationship and index is documented in
+  [`database-schema.md`](database-schema.md). `sql/drop_schema.sql` resets it.
+- **Star schema**: `fact_sales` (grain = one order line), `dim_date`,
+  `dim_customer`, `dim_product`, `dim_region`.
 - **Operational / audit tables**: `pipeline_runs`, `file_registry`,
   `data_quality_results`, `rejected_records`, `anomalies`, `recommendations`,
-  `forecast_results`.
-- **Indexes**: `Order_ID`, `Order_Date`, `Customer_ID`, `Product_ID`, `Region`,
-  `Category`.
+  `forecast_results` - all run-scoped rows carry `run_id` -> `pipeline_runs`.
+- **Indexes**: the six spec-named `fact_sales` indexes (`order_id`, `order_date`,
+  `customer_id`, `product_id`, `region`, `category`) plus FK, composite
+  `(region, category, order_date)`, and operational-table indexes.
 - **`src/database.py`** (new Phase 9): connection management, pooling,
   transactions, retries with backoff, parameterised query execution, error
   handling. Every other component reaches the database only through this module.

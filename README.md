@@ -33,7 +33,7 @@ dropped). Current progress is tracked in
 |------|--------|-------|-------|
 | 0 | 0 | Project initialization | **Complete** |
 | 1 | 1-6 | Architecture, requirements, dataset, generation | **Complete** |
-| 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | Phase 7 complete |
+| 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | Phases 7-8 complete |
 | 3 | 15-17 | SQL / KPIs / views / change detection | Not started |
 | 4 | 18-23 | Anomaly / drift / RCA / impact | Not started |
 | 5 | 24-26 | RFM / product intel / forecast / recommendations | Not started |

@@ -79,6 +79,9 @@ from insight back to source file.
   never calls the next stage directly.
 - All database access goes through `src/database.py` (parameterised queries,
   transactions, retries).
+- The tables above are defined in `sql/schema.sql` (Phase 8); see
+  [`database-schema.md`](database-schema.md) for columns, relationships and
+  indexes.
 
 ## 5. Immutability & traceability guarantees
 
