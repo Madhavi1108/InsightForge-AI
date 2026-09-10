@@ -33,7 +33,7 @@ dropped). Current progress is tracked in
 |------|--------|-------|-------|
 | 0 | 0 | Project initialization | **Complete** |
 | 1 | 1-6 | Architecture, requirements, dataset, generation | **Complete** |
-| 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | Phases 7-9 complete |
+| 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | Phases 7-10 complete |
 | 3 | 15-17 | SQL / KPIs / views / change detection | Not started |
 | 4 | 18-23 | Anomaly / drift / RCA / impact | Not started |
 | 5 | 24-26 | RFM / product intel / forecast / recommendations | Not started |
@@ -107,12 +107,19 @@ copy .env.example .env
 ### 3. Run the pipeline
 
 ```powershell
-# manual fallback entry point (runs the same orchestration code as the watcher)
-python run_pipeline.py --help
+# start PostgreSQL and create the schema (Phases 7-8)
+python scripts/postgres.py up
+python scripts/apply_schema.py
+
+# ingest files (Phase 10): one file, a sweep, or watch the drop zone
+python run_pipeline.py --file data/incoming/sales_2026_08_01.csv
+python run_pipeline.py --scan
+python run_pipeline.py --watch        # Ctrl+C to stop
 ```
 
-The normal mode is automatic: start the file watcher and drop a CSV into
-`data/incoming/`. Watcher / scheduler wiring is added in the automation phases.
+Ingestion + SHA-256 fingerprinting run for real today (see
+[`docs/ingestion.md`](docs/ingestion.md)); validation, ETL and analytics arrive
+in Phase 11+. Scheduled-mode (`--scheduler`) wiring is added in Phase 35.
 
 ---
 

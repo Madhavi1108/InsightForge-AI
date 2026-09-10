@@ -61,11 +61,11 @@ def test_run_pipeline_help_executes():
     assert "InsightForge AI" in result.stdout
 
 
-def test_run_pipeline_reports_orchestrator_not_ready():
-    """Until Phase 19 the manual entry point should exit cleanly with code 3."""
+def test_run_pipeline_scheduler_mode_not_ready():
+    """Ingestion (Phase 10) runs for real; scheduled mode is still Phase 35."""
     result = subprocess.run(
-        [sys.executable, "run_pipeline.py", "--scan"],
+        [sys.executable, "run_pipeline.py", "--scheduler"],
         cwd=PROJECT_ROOT, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 3
-    assert "not implemented yet" in result.stdout
+    assert "Phase 35" in result.stdout

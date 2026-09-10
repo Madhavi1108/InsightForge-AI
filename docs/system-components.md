@@ -22,17 +22,34 @@
 
 ## Ingestion
 
-### `src/ingestion.py` (new Phase 10)
-- **Responsibility**: watch `data/incoming/`, validate the file is readable,
-  collect metadata (name, size, row count, mtime), compute SHA-256, check
-  `file_registry` for a duplicate hash, mint a pipeline run ID, move the raw file
-  to `data/raw/` and copy to `data/archive/`.
-- **Inputs**: a file path (from the watcher or `run_pipeline.py`).
-- **Outputs**: `file_registry` row (name, `file_hash`, size, rows, first-seen
-  run ID); `pipeline_runs` row (`RUNNING`); file relocated.
-- **Dependencies**: watchdog, hashlib, DB connection layer.
-- **Failure behaviour**: duplicate hash -> run `SKIPPED_DUPLICATE`, no mutation;
-  unreadable / empty file -> run `FAILED`, reason recorded, alert.
+### `src/ingestion.py` (Phase 10 - **delivered**)
+- **Responsibility**: validate an incoming file is a readable, non-empty `.csv`
+  *before parsing*; collect metadata (name, size, row count, mtime); compute a
+  streamed SHA-256; check `file_registry` for a duplicate hash; mint a
+  `pipeline_runs` row; **move** the file `data/incoming/ -> data/raw/` and
+  **copy** `data/raw/ -> data/archive/`; write the `file_registry` row.
+- **API**: `sha256_file`, `collect_metadata -> FileMetadata`,
+  `ingest_file(path, db, paths) -> IngestionResult`, `IngestionError`, and the
+  `watchdog` watcher `watch(incoming_dir, dispatch, ...)` /
+  `wait_until_stable(...)`. Contract in [`ingestion.md`](ingestion.md).
+- **Inputs**: a file path (from the watcher or `run_pipeline.py`); a
+  `src.database.Database`; a `src.config.PipelinePaths`.
+- **Outputs**: `file_registry` row; `pipeline_runs` row (`RUNNING`, later closed
+  by the orchestrator); file relocated.
+- **Failure behaviour**: duplicate hash -> `SKIPPED_DUPLICATE` run, re-drop moved
+  to `data/archive/`, no `file_registry`/warehouse change; unreadable / empty /
+  wrong-type file -> `IngestionError` -> run `FAILED` with a sanitised reason.
+
+### `src/orchestrator.py` (Phase 10 - **delivered**)
+- **Responsibility**: the sole pipeline sequencer. `main(args)` is called by both
+  entry points (`run_pipeline.py` and the watcher) with the same parsed args and
+  dispatches `--file` / `--scan` / `--watch` / `--scheduler` (+ `--dry-run`).
+  Runs the DB healthcheck, calls `ingest_file`, and - until validation/ETL exist
+  (Phase 11+) - closes an ingested run as `PARTIAL` with `stage_metrics.ingest`
+  and a `data/processed/<name>.json` summary.
+- **Failure behaviour**: DB unavailable -> exit 4 with a sanitised message (no
+  traceback); a file that fails ingestion -> exit 5; `--scheduler` -> exit 3
+  (APScheduler wiring is Phase 35). Structured `logs/` output is Phase 35.
 
 ## Validation
 

@@ -160,3 +160,66 @@ def get_settings() -> PostgresSettings:
             "(acceptable for local development only)."
         )
     return settings
+
+
+# --------------------------------------------------------------------------- #
+# Pipeline filesystem paths
+# --------------------------------------------------------------------------- #
+# Defaults mirror ``.env.example``. A relative value is resolved against
+# ``PROJECT_ROOT``; an absolute value is used unchanged.
+_PATH_DEFAULTS = {
+    "incoming": "data/incoming",
+    "raw": "data/raw",
+    "processed": "data/processed",
+    "rejected": "data/rejected",
+    "archive": "data/archive",
+    "logs": "logs",
+    "reports": "reports",
+}
+_PATH_ENV = {
+    "incoming": "DATA_INCOMING_DIR",
+    "raw": "DATA_RAW_DIR",
+    "processed": "DATA_PROCESSED_DIR",
+    "rejected": "DATA_REJECTED_DIR",
+    "archive": "DATA_ARCHIVE_DIR",
+    "logs": "LOGS_DIR",
+    "reports": "REPORTS_DIR",
+}
+
+
+def _resolve_path(value: str) -> Path:
+    p = Path(value).expanduser()
+    return p if p.is_absolute() else (PROJECT_ROOT / p)
+
+
+@dataclass(frozen=True)
+class PipelinePaths:
+    """Resolved absolute paths for the pipeline's working directories."""
+
+    incoming: Path
+    raw: Path
+    processed: Path
+    rejected: Path
+    archive: Path
+    logs: Path
+    reports: Path
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "PipelinePaths":
+        env = os.environ if environ is None else environ
+        return cls(**{
+            field: _resolve_path(env.get(_PATH_ENV[field], _PATH_DEFAULTS[field]))
+            for field in _PATH_DEFAULTS
+        })
+
+    def ensure(self) -> None:
+        """Create every directory (idempotent)."""
+        for field in _PATH_DEFAULTS:
+            getattr(self, field).mkdir(parents=True, exist_ok=True)
+
+
+@lru_cache(maxsize=1)
+def get_paths() -> PipelinePaths:
+    """Load ``.env`` then resolve :class:`PipelinePaths` (cached)."""
+    load_env()
+    return PipelinePaths.from_env()

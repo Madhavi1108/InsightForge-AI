@@ -49,10 +49,13 @@ from insight back to source file.
 
 ## 3. Stage-by-stage flow
 
+Stages 1-2 are implemented in `src/ingestion.py` (Phase 10); see
+[`ingestion.md`](ingestion.md).
+
 | # | Stage | Reads | Writes | Notes |
 |--:|-------|-------|--------|-------|
 | 1 | **Detect** | `data/incoming/` | - | watchdog event or `--scan` |
-| 2 | **Fingerprint & register** | file bytes, `file_registry` | `file_registry`, `pipeline_runs` (RUNNING), moves file to `raw/` + `archive/` | SHA-256; duplicate hash -> `SKIPPED_DUPLICATE`, stop |
+| 2 | **Fingerprint & register** | file bytes, `file_registry` | `file_registry`, `pipeline_runs` (RUNNING), moves file to `raw/` + `archive/` | SHA-256; duplicate hash -> `SKIPPED_DUPLICATE`, re-drop moved to `archive/`, stop |
 | 3 | **Schema validation** | `raw/` file, `config/data_contract.yaml` | `rejected_records` (structural), `pipeline_runs` | missing/extra columns, wrong types, missing mandatory fields -> reject file, `FAILED` |
 | 4 | **Alteryx / Python ETL** | validated rows | `fact_sales`, `dim_date`, `dim_customer`, `dim_product`, `dim_region` | derives `Revenue`, `Profit`; prepares dimensions |
 | 5 | **Data quality engine** | loaded rows / staging | `data_quality_results`, `rejected_records` (row-level), `pipeline_runs.dq_score` | completeness, validity, uniqueness, consistency, accuracy, timeliness, referential integrity |

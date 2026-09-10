@@ -10,10 +10,11 @@ Usage
 -----
     python run_pipeline.py --file data/incoming/sales_2026_09_09.csv
     python run_pipeline.py --scan            # process every file in data/incoming/
-    python run_pipeline.py --scheduler       # run the scheduled-mode loop
+    python run_pipeline.py --watch           # watch data/incoming/ for new files
+    python run_pipeline.py --scheduler       # scheduled-mode loop (arrives in Phase 35)
 
-Until the orchestrator lands (Phase 10) this script validates the environment
-and reports which phases are implemented, without pretending to do more.
+Ingestion + SHA-256 fingerprinting (Phase 10) run for real; validation, ETL and
+analytics arrive in Phase 11+. Scheduled mode is wired in Phase 35.
 """
 from __future__ import annotations
 
@@ -63,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--scan",
         action="store_true",
         help="process every file currently in data/incoming/",
+    )
+    mode.add_argument(
+        "--watch",
+        action="store_true",
+        help="watch data/incoming/ and process new files as they arrive",
     )
     mode.add_argument(
         "--scheduler",
