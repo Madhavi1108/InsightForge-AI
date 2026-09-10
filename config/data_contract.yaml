@@ -1,0 +1,196 @@
+# ==========================================================================
+# InsightForge AI - data contract (Phase 11 / spec Phases 21-22)
+# --------------------------------------------------------------------------
+# Declarative structural + per-field contract for the 22-field retail dataset
+# (docs/dataset-design.md). Enforced by src/validation.py as pipeline stage 3.
+#
+# SCOPE: shape, types, patterns, ranges, category membership, nullability, and
+# the Category->Sub_Category / Region->State->City hierarchies. NOT in scope
+# here (Phase 14): the 7-dimension data-quality *score*, the PASS/WARN/REJECT
+# gate, and Revenue/Profit formula consistency.
+#
+# The contract is exactly satisfiable by `generate_dataset.py --clean` output
+# and by the held-out demo day (2026-09-09).
+# ==========================================================================
+version: 1
+description: >
+  Structural and per-field contract for InsightForge AI sales CSVs. A file whose
+  column set/order does not match is rejected outright; rows that violate a
+  field rule are recorded in rejected_records and excluded from the load.
+
+# Exact column set AND order every ingested CSV must have (scripts COLUMNS).
+columns:
+  - Order_ID
+  - Order_Date
+  - Customer_ID
+  - Customer_Name
+  - Customer_Segment
+  - Product_ID
+  - Product_Name
+  - Category
+  - Sub_Category
+  - Region
+  - State
+  - City
+  - Quantity
+  - Unit_Price
+  - Discount
+  - Revenue
+  - Cost
+  - Profit
+  - Payment_Method
+  - Shipping_Days
+  - Order_Status
+  - Return_Status
+
+# Unknown columns fail structural validation.
+allow_extra_columns: false
+
+# Columns that must be present and non-empty on every row (all but Shipping_Days).
+mandatory:
+  - Order_ID
+  - Order_Date
+  - Customer_ID
+  - Customer_Name
+  - Customer_Segment
+  - Product_ID
+  - Product_Name
+  - Category
+  - Sub_Category
+  - Region
+  - State
+  - City
+  - Quantity
+  - Unit_Price
+  - Discount
+  - Revenue
+  - Cost
+  - Profit
+  - Payment_Method
+  - Order_Status
+  - Return_Status
+
+# Per-field rules. type is one of: string | integer | decimal | date | category.
+# integer accepts an integral value written as a float ("4" or "4.0").
+fields:
+  Order_ID:
+    type: string
+    pattern: '^ORD-\d{8}$'
+  Order_Date:
+    type: date
+    format: '%Y-%m-%d'
+    min: '2026-01-01'
+    max: '2026-09-09'      # delivery window end (09-08) + held-out demo day
+  Customer_ID:
+    type: string
+    pattern: '^CUST-\d{6}$'
+  Customer_Name:
+    type: string
+    min_length: 2
+    max_length: 60
+  Customer_Segment:
+    type: category
+    values: [Consumer, Corporate, Home Office]
+  Product_ID:
+    type: string
+    pattern: '^PROD-\d{5}$'
+  Product_Name:
+    type: string
+    min_length: 2
+    max_length: 80
+  Category:
+    type: category
+    values: [Electronics, Furniture, Office Supplies, Clothing, Home & Kitchen]
+  Sub_Category:
+    type: string          # validity is (Category, Sub_Category) - see hierarchies
+  Region:
+    type: category
+    values: [North, South, East, West, Central]
+  State:
+    type: string          # validity is (Region, State, City) - see hierarchies
+  City:
+    type: string
+  Quantity:
+    type: integer
+    min: 1
+  Unit_Price:
+    type: decimal
+    min: 0
+    exclusive_min: true
+  Discount:
+    type: decimal
+    min: 0.0
+    max: 0.8
+  Revenue:
+    type: decimal
+    min: 0
+  Cost:
+    type: decimal
+    min: 0
+    exclusive_min: true
+  Profit:
+    type: decimal          # derived; may be negative, so no bound
+  Payment_Method:
+    type: category
+    values: [UPI, Credit Card, Debit Card, Net Banking, COD, Wallet]
+  Shipping_Days:
+    type: integer
+    min: 0
+    max: 30                # normal 0-21; the planted anomaly's primary tier reaches 30
+    nullable: true         # empty for Pending / Cancelled orders
+  Order_Status:
+    type: category
+    values: [Completed, Pending, Cancelled, Returned]
+  Return_Status:
+    type: category
+    values: [Not Returned, Returned]
+
+# Cross-field membership rules.
+hierarchies:
+  # Sub_Category must be a declared child of its Category. Note that "Storage"
+  # and "Accessories" appear under two categories, so the pair is what matters.
+  category_subcategory:
+    Electronics: [Laptop, Phone, Camera, Audio, Accessories]
+    Furniture: [Chairs, Tables, Bookcases, Storage]
+    Office Supplies: [Paper, Binders, Pens, Art, Storage]
+    Clothing: [Menswear, Womenswear, Footwear, Accessories]
+    Home & Kitchen: [Cookware, Appliances, Decor, Bedding]
+
+  # City must belong to State, State to Region (scripts GEOGRAPHY: 5 regions,
+  # 23 states, 74 cities).
+  region_state_city:
+    North:
+      Delhi: [New Delhi]
+      Punjab: [Ludhiana, Amritsar, Jalandhar]
+      Haryana: [Gurugram, Faridabad, Panipat]
+      Uttar Pradesh: [Lucknow, Kanpur, Noida, Agra, Varanasi]
+      Himachal Pradesh: [Shimla, Solan]
+      Jammu and Kashmir: [Srinagar, Jammu]
+    South:
+      Karnataka: [Bengaluru, Mysuru, Hubballi, Mangaluru]
+      Tamil Nadu: [Chennai, Coimbatore, Madurai, Tiruchirappalli]
+      Telangana: [Hyderabad, Warangal]
+      Kerala: [Kochi, Thiruvananthapuram, Kozhikode]
+      Andhra Pradesh: [Visakhapatnam, Vijayawada, Guntur]
+    East:
+      West Bengal: [Kolkata, Howrah, Siliguri, Durgapur]
+      Odisha: [Bhubaneswar, Cuttack, Rourkela]
+      Bihar: [Patna, Gaya, Bhagalpur]
+      Jharkhand: [Ranchi, Jamshedpur, Dhanbad]
+      Assam: [Guwahati, Dibrugarh]
+    West:
+      Maharashtra: [Mumbai, Pune, Nagpur, Nashik, Thane]
+      Gujarat: [Ahmedabad, Surat, Vadodara, Rajkot]
+      Rajasthan: [Jaipur, Jodhpur, Kota, Udaipur]
+      Goa: [Panaji, Margao]
+    Central:
+      Madhya Pradesh: [Indore, Bhopal, Gwalior, Jabalpur, Ujjain]
+      Chhattisgarh: [Raipur, Bhilai, Bilaspur]
+      Uttarakhand: [Dehradun, Haridwar, Rishikesh, Haldwani]
+
+# Declared for completeness (spec Phase 21). ENFORCEMENT IS PHASE 14: a fully
+# duplicated row (every column identical) is a Uniqueness defect scored by the
+# data-quality engine, not rejected by this structural validator.
+uniqueness:
+  row: all_columns
+  note: enforced by the Phase 14 data-quality engine, not by src/validation.py

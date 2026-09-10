@@ -4,13 +4,14 @@ The single component that sequences the pipeline (``docs/architecture.md`` §4).
 Both entry points - the ``watchdog`` watcher and ``run_pipeline.py`` - call
 :func:`main` with the same parsed arguments.
 
-Today the pipeline has one working stage: **ingestion** (``src/ingestion.py``).
-Validation / ETL / analytics arrive in Phase 11+. Until then an ingested file's
-run is closed as ``PARTIAL`` with an explanatory note; later phases will flip it
-to ``SUCCESS``.
+Working stages: **ingestion** (``src/ingestion.py``) and **schema validation**
+(``src/validation.py``, Phase 11). ETL / analytics arrive in Phase 12+. Until
+then an ingested + validated file's run is closed as ``PARTIAL`` with an
+explanatory note; later phases will flip it to ``SUCCESS``.
 
 Exit codes: ``0`` ok, ``2`` no mode chosen, ``3`` nothing to do / mode not built
-yet, ``4`` database unavailable, ``5`` a file failed ingestion.
+yet, ``4`` database unavailable, ``5`` a file failed ingestion, ``6`` a file
+failed schema validation (rejected).
 """
 from __future__ import annotations
 
@@ -26,10 +27,11 @@ from src import ingestion
 from src.config import get_paths
 from src.database import Database, DatabaseError
 from src.ingestion import IngestionError, IngestionResult, ingest_file
+from src.validation import ValidationResult, validate_csv
 
 logger = logging.getLogger(__name__)
 
-_PARTIAL_NOTE = "stages after ingestion not implemented yet (Phase 11+)"
+_PARTIAL_NOTE = "stages after validation not implemented yet (Phase 12+)"
 
 
 def _configure_logging() -> None:
@@ -40,18 +42,56 @@ def _configure_logging() -> None:
     )
 
 
-def _write_processed_summary(processed_dir: Path, result: IngestionResult) -> None:
+def _write_processed_summary(processed_dir: Path, result: IngestionResult,
+                             vres: ValidationResult) -> None:
     processed_dir.mkdir(parents=True, exist_ok=True)
     summary = {
         "run_id": result.run_id,
         "file_name": result.file_name,
         "file_hash": result.file_hash,
         "rows_received": result.metadata.row_count,
+        "rows_valid": vres.rows_valid,
+        "rows_rejected": vres.rows_rejected,
         "status": "PARTIAL",
         "note": _PARTIAL_NOTE,
     }
     out = processed_dir / f"{Path(result.file_name).stem}.json"
     out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+
+def _reject_structural(db: Database, run_id: int, reason: str) -> None:
+    db.execute(
+        "INSERT INTO rejected_records "
+        "(run_id, rejection_category, rejection_reason, dq_dimension) "
+        "VALUES (:run, 'schema', :reason, 'Validity')",
+        {"run": run_id, "reason": reason[:1000]},
+    )
+
+
+def _reject_rows(db: Database, run_id: int, vres: ValidationResult) -> int:
+    by_row: dict[int, list] = {}
+    for v in vres.row_violations:
+        by_row.setdefault(v.row_number, []).append(v)
+    params = []
+    for n, violations in sorted(by_row.items()):
+        categories = {v.category for v in violations}
+        category = next(iter(categories)) if len(categories) == 1 else "multiple"
+        dimension = violations[0].dq_dimension if len(categories) == 1 else "multiple"
+        reason = "; ".join(v.reason for v in violations)[:500]
+        params.append({
+            "run": run_id, "n": n, "oid": violations[0].order_id,
+            "cat": category, "reason": reason, "dim": dimension,
+            "raw": json.dumps(vres.rejected_rows[n], ensure_ascii=False),
+        })
+    if params:
+        db.execute_many(
+            "INSERT INTO rejected_records "
+            "(run_id, source_row_number, order_id, rejection_category, "
+            "rejection_reason, dq_dimension, raw_record) "
+            "VALUES (:run, :n, :oid, :cat, :reason, :dim, CAST(:raw AS JSONB))",
+            params,
+        )
+    return len(params)
 
 
 def run_file(path: Path, *, dry_run: bool = False) -> int:
@@ -86,22 +126,50 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
         print(f"[skip] {result.file_name}: SKIPPED_DUPLICATE (run {result.run_id})")
         return 0
 
+    ingest_seconds = round(time.monotonic() - started, 3)
+    ingest_metrics = {
+        "seconds": ingest_seconds,
+        "rows_received": result.metadata.row_count,
+        "size_bytes": result.metadata.size_bytes,
+        "sha256": result.file_hash,
+    }
+
+    # Stage 3 - schema / contract validation (Phase 11)
+    v_started = time.monotonic()
+    vres = validate_csv(result.raw_path)
+    validate_metrics = {**vres.summary(), "seconds": round(time.monotonic() - v_started, 3)}
+
+    if not vres.structural_ok:
+        reason = "; ".join(vres.structural_errors)[:500]
+        _reject_structural(db, result.run_id, reason)
+        db.execute(
+            "UPDATE pipeline_runs SET status='FAILED', finished_at=now(), "
+            "duration_s=:d, rows_received=:rr, rows_valid=0, rows_rejected=0, "
+            "error=:e, stage_metrics=CAST(:sm AS JSONB) WHERE run_id=:r",
+            {"d": round(time.monotonic() - started, 3), "rr": result.metadata.row_count,
+             "e": f"schema invalid: {reason}",
+             "sm": json.dumps({"ingest": ingest_metrics, "validate": validate_metrics}),
+             "r": result.run_id},
+        )
+        print(f"[error] {result.file_name}: schema invalid - {reason}")
+        return 6
+
+    if vres.row_violations:
+        _reject_rows(db, result.run_id, vres)
+
     elapsed = round(time.monotonic() - started, 3)
-    stage_metrics = json.dumps({
-        "ingest": {
-            "seconds": elapsed,
-            "rows_received": result.metadata.row_count,
-            "size_bytes": result.metadata.size_bytes,
-            "sha256": result.file_hash,
-        }
-    })
     db.execute(
         "UPDATE pipeline_runs SET status='PARTIAL', finished_at=now(), "
-        "duration_s=:d, error=:note, stage_metrics=CAST(:sm AS JSONB) WHERE run_id=:r",
-        {"d": elapsed, "note": _PARTIAL_NOTE, "sm": stage_metrics, "r": result.run_id},
+        "duration_s=:d, rows_received=:rr, rows_valid=:rv, rows_rejected=:rj, "
+        "error=:note, stage_metrics=CAST(:sm AS JSONB) WHERE run_id=:r",
+        {"d": elapsed, "rr": result.metadata.row_count, "rv": vres.rows_valid,
+         "rj": vres.rows_rejected, "note": _PARTIAL_NOTE,
+         "sm": json.dumps({"ingest": ingest_metrics, "validate": validate_metrics}),
+         "r": result.run_id},
     )
-    _write_processed_summary(paths.processed, result)
-    print(f"[ok] {result.file_name}: ingested as run {result.run_id} "
+    _write_processed_summary(paths.processed, result, vres)
+    print(f"[ok] {result.file_name}: run {result.run_id} - "
+          f"{vres.rows_valid} valid / {vres.rows_rejected} rejected "
           f"(PARTIAL - {_PARTIAL_NOTE})")
     return 0
 

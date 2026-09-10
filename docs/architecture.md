@@ -120,6 +120,7 @@ data is always still in `data/archive/`.
 - [`database-schema.md`](database-schema.md) - star schema, operational tables, indexes & lineage
 - [`database-layer.md`](database-layer.md) - `src/database.py` API, pooling, retry policy & error taxonomy
 - [`ingestion.md`](ingestion.md) - file ingestion, SHA-256 fingerprinting & the orchestrator
+- [`validation.md`](validation.md) - the data contract & schema validation (pipeline stage 3)
 - [`security.md`](security.md) - secrets, SQL safety, AI safety, auditability
 - [`requirements.md`](requirements.md) - functional & non-functional requirements
 - [`business-questions.md`](business-questions.md) - questions the system answers

@@ -53,20 +53,30 @@
 
 ## Validation
 
-### `config/data_contract.yaml` (new Phase 11)
-- **Responsibility**: declarative contract - required columns, types, numeric
-  ranges, accepted categories, nullability, uniqueness keys.
-- **Consumed by**: `src/validation.py`, the data quality engine, and the Alteryx
-  data-quality workflow.
+### `config/data_contract.yaml` (Phase 11 - **delivered**)
+- **Responsibility**: declarative contract for the 22-field CSV - exact
+  `columns` (order enforced) + `allow_extra_columns`, `mandatory` set, per-field
+  `type` / `pattern` / `min`-`max` / `values` / `nullable` / length, and the
+  `Category->Sub_Category` / `Region->State->City` hierarchies. `uniqueness` is
+  declared but scored by Phase 14, not this validator.
+- **Consumed by**: `src/validation.py` (and later the Phase 14 data-quality
+  engine and the Alteryx data-quality workflow).
 
-### `src/validation.py` (new Phase 11)
-- **Responsibility**: enforce the contract - missing columns, extra columns, wrong
-  types, out-of-range values, missing mandatory fields.
-- **Inputs**: raw dataframe + `data_contract.yaml`.
-- **Outputs**: pass/fail; on structural failure the file is rejected; on row-level
-  failures the offending rows are handed to rejected-record management.
-- **Failure behaviour**: structural failure -> run `FAILED`, alert; never loads an
-  invalid schema.
+### `src/validation.py` (Phase 11 - **delivered**)
+- **Responsibility**: enforce the contract - `get_contract()` +
+  `validate_csv` / `validate_frame` -> `ValidationResult`
+  (`structural_ok`, `structural_errors`, `row_violations`,
+  `rows_valid` / `rows_rejected`, `rejected_rows`). Structural checks
+  (missing / extra / reordered columns) reject the file; per-row checks (type,
+  pattern, range, category, mandatory presence, hierarchy) flag rows. Pure - no
+  DB, no side effects on import. Contract in [`validation.md`](validation.md).
+- **Inputs**: a CSV path (or dataframe) + `config/data_contract.yaml`.
+- **Outputs**: consumed by the orchestrator's stage 3 - structural failure -> one
+  `rejected_records` `'schema'` row + run `FAILED` + exit code 6; row violations
+  -> one `rejected_records` row per bad data-row (raw row as JSONB) + run
+  `PARTIAL` with `rows_valid` / `rows_rejected`.
+- **Failure behaviour**: structural failure -> run `FAILED`; never loads an
+  invalid schema. The 7-dimension DQ score and PASS/WARN/REJECT gate are Phase 14.
 
 ## ETL
 

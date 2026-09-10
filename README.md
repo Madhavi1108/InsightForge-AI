@@ -33,7 +33,7 @@ dropped). Current progress is tracked in
 |------|--------|-------|-------|
 | 0 | 0 | Project initialization | **Complete** |
 | 1 | 1-6 | Architecture, requirements, dataset, generation | **Complete** |
-| 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | Phases 7-10 complete |
+| 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | Phases 7-11 complete |
 | 3 | 15-17 | SQL / KPIs / views / change detection | Not started |
 | 4 | 18-23 | Anomaly / drift / RCA / impact | Not started |
 | 5 | 24-26 | RFM / product intel / forecast / recommendations | Not started |
@@ -117,9 +117,10 @@ python run_pipeline.py --scan
 python run_pipeline.py --watch        # Ctrl+C to stop
 ```
 
-Ingestion + SHA-256 fingerprinting run for real today (see
-[`docs/ingestion.md`](docs/ingestion.md)); validation, ETL and analytics arrive
-in Phase 11+. Scheduled-mode (`--scheduler`) wiring is added in Phase 35.
+Ingestion + SHA-256 fingerprinting ([`docs/ingestion.md`](docs/ingestion.md))
+and schema/contract validation ([`docs/validation.md`](docs/validation.md)) run
+for real today; ETL and analytics arrive in Phase 12+. Scheduled-mode
+(`--scheduler`) wiring is added in Phase 35.
 
 ---
 

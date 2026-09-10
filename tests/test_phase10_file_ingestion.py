@@ -458,6 +458,7 @@ def test_ingest_registers_hash_and_dedupes(tmp_path):
 def test_run_file_closes_run_as_partial(tmp_path, monkeypatch):
     pytest.importorskip("psycopg2")
     _apply_schema()
+    from scripts import generate_dataset as gd
     from src import orchestrator
     from src.config import PipelinePaths
     from src.database import Database
@@ -466,7 +467,9 @@ def test_run_file_closes_run_as_partial(tmp_path, monkeypatch):
     p.ensure()
     monkeypatch.setattr(orchestrator, "get_paths", lambda: p)
     name = f"{SENTINEL}_c.csv"
-    (p.incoming / name).write_bytes(_rows())
+    gd.generate_dataset(rows=40, seed=5).to_csv(
+        p.incoming / name, index=False, date_format="%Y-%m-%d"
+    )
     db = Database()
     try:
         assert orchestrator.run_file(p.incoming / name) == 0
@@ -477,6 +480,7 @@ def test_run_file_closes_run_as_partial(tmp_path, monkeypatch):
         assert row["status"] == "PARTIAL"
         assert "not implemented yet" in row["error"]
         assert "ingest" in json.dumps(row["stage_metrics"])
+        assert "validate" in json.dumps(row["stage_metrics"])
         assert (p.processed / f"{SENTINEL}_c.json").is_file()
     finally:
         db.execute("DELETE FROM file_registry WHERE file_name LIKE :p", {"p": SENTINEL + "%"})

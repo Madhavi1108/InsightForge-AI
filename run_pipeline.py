@@ -13,8 +13,12 @@ Usage
     python run_pipeline.py --watch           # watch data/incoming/ for new files
     python run_pipeline.py --scheduler       # scheduled-mode loop (arrives in Phase 35)
 
-Ingestion + SHA-256 fingerprinting (Phase 10) run for real; validation, ETL and
-analytics arrive in Phase 11+. Scheduled mode is wired in Phase 35.
+Ingestion + SHA-256 fingerprinting (Phase 10) and schema/contract validation
+(Phase 11) run for real; ETL and analytics arrive in Phase 12+. Scheduled mode
+is wired in Phase 35.
+
+Exit codes: 0 ok, 2 no mode, 3 nothing to do / not built, 4 database
+unavailable, 5 file failed ingestion, 6 file failed schema validation.
 """
 from __future__ import annotations
 
