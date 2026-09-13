@@ -189,11 +189,13 @@
 - **Outputs**: KPI result sets consumed by intelligence, reporting, BI, and
   Phase 16's views (below), which wrap the same calculations by grain.
 
-### `sql/views.sql` (new Phase 16)
+### `sql/views.sql` (Phase 16 - **delivered**)
 - **Responsibility**: PostgreSQL views `daily_kpis`, `monthly_kpis`,
   `regional_performance`, `category_performance`, `product_performance`,
-  `customer_performance` - persistent, queryable wrappers around Phase 15's
-  calculations.
+  `customer_performance` - persistent, queryable, **complete** (unfiltered)
+  wrappers around Phase 15's calculations. `CREATE OR REPLACE VIEW`
+  throughout (no portable `IF NOT EXISTS` for views). Applied by
+  `scripts/apply_schema.py` right after `sql/schema.sql`.
 - **Inputs**: star schema.
 - **Outputs**: views consumed by intelligence, reporting, BI.
 

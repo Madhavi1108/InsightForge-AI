@@ -51,12 +51,12 @@ of the 10 queries in `sql/kpi_queries.sql`:
 | product | `top_products_by_revenue` |
 | customer | `customer_performance` |
 
-Phase 16 (spec 32, a separate phase) wraps these same calculations into 6
-persistent, queryable views (`daily_kpis`, `monthly_kpis`,
+Phase 16 (spec 32, `sql/views.sql` - **delivered**, see
+[`analytical-views.md`](analytical-views.md)) wraps these same calculations
+into 6 persistent, queryable views (`daily_kpis`, `monthly_kpis`,
 `regional_performance`, `category_performance`, `product_performance`,
-`customer_performance`) - deliberately different query names are used here
-to keep the two phases distinct; Phase 16 can lift these `SELECT` bodies
-directly into `CREATE VIEW` statements.
+`customer_performance`), complete at every grain (Phase 15's demonstration
+queries above filter to illustrate a subquery technique; the views don't).
 
 ## 3. The 10 queries and their techniques
 

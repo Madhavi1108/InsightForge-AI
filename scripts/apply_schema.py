@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""InsightForge AI - apply the database schema (Phase 8 / spec Phases 15-17).
+"""InsightForge AI - apply the database schema (Phase 8 / spec Phases 15-17;
+views added in Phase 16 / spec Phase 32).
 
-Runs ``sql/schema.sql`` (optionally ``sql/drop_schema.sql`` first) against the
-PostgreSQL instance configured in ``.env``. Connection parameters come from
-``src.config.PostgresSettings`` - nothing is hard-coded.
+Runs ``sql/schema.sql`` then ``sql/views.sql`` (optionally ``sql/drop_schema.sql``
+first) against the PostgreSQL instance configured in ``.env``. Connection
+parameters come from ``src.config.PostgresSettings`` - nothing is hard-coded.
 
 Usage
 -----
@@ -11,10 +12,11 @@ Usage
     python scripts/apply_schema.py --drop          # drop then recreate (DEV ONLY)
     python scripts/apply_schema.py --dry-run       # print the plan, touch nothing
 
-The schema is idempotent (every object uses ``IF NOT EXISTS``), so a plain run on
-an already-provisioned database is a safe no-op. The pooled connection layer
-(``src/database.py``) arrives in Phase 9; this one-shot DDL tool talks to
-``psycopg2`` directly.
+The schema is idempotent (every object uses ``IF NOT EXISTS``); the views file
+uses ``CREATE OR REPLACE VIEW`` (views have no portable ``IF NOT EXISTS``). A
+plain run on an already-provisioned database is a safe no-op / refresh. The
+pooled connection layer (``src/database.py``) arrives in Phase 9; this
+one-shot DDL tool talks to ``psycopg2`` directly.
 """
 from __future__ import annotations
 
@@ -25,19 +27,24 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_SQL = PROJECT_ROOT / "sql" / "schema.sql"
 DROP_SQL = PROJECT_ROOT / "sql" / "drop_schema.sql"
+VIEWS_SQL = PROJECT_ROOT / "sql" / "views.sql"
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def _expected_objects() -> tuple[list[str], list[str]]:
-    """(tables, indexes) the schema is expected to define - for the summary."""
+    """(tables, views) the schema is expected to define - for the summary."""
     tables = [
         "pipeline_runs", "file_registry", "data_quality_results",
         "rejected_records", "anomalies", "recommendations", "forecast_results",
         "dim_date", "dim_customer", "dim_product", "dim_region", "fact_sales",
     ]
-    return tables, []
+    views = [
+        "daily_kpis", "monthly_kpis", "regional_performance",
+        "category_performance", "product_performance", "customer_performance",
+    ]
+    return tables, views
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -59,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    for path in (SCHEMA_SQL, DROP_SQL):
+    for path in (SCHEMA_SQL, DROP_SQL, VIEWS_SQL):
         if not path.is_file():
             print(f"[error] missing SQL file: {path}")
             return 2
@@ -69,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     schema_sql = SCHEMA_SQL.read_text(encoding="utf-8")
     drop_sql = DROP_SQL.read_text(encoding="utf-8")
+    views_sql = VIEWS_SQL.read_text(encoding="utf-8")
 
     print("InsightForge AI - apply schema")
     print("=" * 40)
@@ -79,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.drop:
             print("\n--- sql/drop_schema.sql ---\n" + drop_sql)
         print("\n--- sql/schema.sql ---\n" + schema_sql)
+        print("\n--- sql/views.sql ---\n" + views_sql)
         print("[dry-run] nothing was executed")
         return 0
 
@@ -95,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[error] could not connect to PostgreSQL: {exc.__class__.__name__}")
         return 4
 
-    tables, _ = _expected_objects()
+    tables, views = _expected_objects()
     try:
         conn.autocommit = False
         with conn, conn.cursor() as cur:
@@ -104,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
                 cur.execute(drop_sql)
             print("[run] sql/schema.sql")
             cur.execute(schema_sql)
+            print("[run] sql/views.sql")
+            cur.execute(views_sql)
 
         with conn.cursor() as cur:
             cur.execute(
@@ -118,15 +129,25 @@ def main(argv: list[str] | None = None) -> int:
                 "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public'"
             )
             index_count = cur.fetchone()[0]
+            cur.execute(
+                "SELECT table_name FROM information_schema.views "
+                "WHERE table_schema = 'public'"
+            )
+            present_views = {r[0] for r in cur.fetchall()}
     finally:
         conn.close()
 
     missing = [t for t in tables if t not in present]
+    missing_views = [v for v in views if v not in present_views]
     print(f"\ntables present : {len(tables) - len(missing)}/{len(tables)}")
     print(f"indexes present: {index_count}")
+    print(f"views present  : {len(views) - len(missing_views)}/{len(views)}")
     if missing:
         print(f"[error] missing tables after apply: {missing}")
         return 5
+    if missing_views:
+        print(f"[error] missing views after apply: {missing_views}")
+        return 6
     print("[ok] schema applied")
     return 0
 
