@@ -265,11 +265,20 @@
   `src/orchestrator.py` (stage 8) because `drift_results.run_id` is
   `NOT NULL` - purely additive, never affects `pipeline_runs.status`.
 
-### `src/root_cause.py` (new Phase 22)
-- **Responsibility**: hierarchical drill-down Region -> Category -> Subcategory ->
-  Product -> Customer Segment; contribution analysis (each dimension's share of a
-  KPI change); every result carries metric, change, primary driver, evidence,
-  contribution, confidence.
+### `src/root_cause.py` (Phase 22 - **delivered**)
+- **Responsibility**: nested, sequential hierarchical drill-down Region ->
+  Category -> Subcategory -> Product -> Customer Segment; contribution
+  analysis (each dimension value's current-minus-previous sum, scoped to
+  summable metrics - `RCA_SUPPORTED_METRICS` = revenue/profit/units); every
+  result carries metric, change, primary driver, evidence, contribution,
+  confidence (`0.7*concentration + 0.3*evidence_strength`).
+- **API**: `contribution_by_dimension`/`drill_down` (pure),
+  `analyze_root_cause(db, metric, current_start, current_end,
+  previous_start, previous_end)`.
+- **Wiring**: pure, on-demand - no database writes, not called from
+  `src/orchestrator.py` (no RCA table forces persistence, unlike Phase
+  20/21's `anomalies`/`drift_results`). Called later by business impact,
+  recommendations, or the AI Analyst.
 
 ### `src/impact_analysis.py` (new Phase 23)
 - **Responsibility**: expected vs actual revenue & profit, revenue/profit gap,
