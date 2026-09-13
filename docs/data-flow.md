@@ -36,7 +36,7 @@ Every execution (watcher-triggered or `run_pipeline.py`) creates one
 |--------|---------|
 | `run_id` | primary key, referenced by every downstream row |
 | `file_name`, `file_hash` | the file being processed |
-| `status` | `RUNNING` -> `SUCCESS` / `PARTIAL` / `FAILED` / `SKIPPED_DUPLICATE` |
+| `status` | `RUNNING` -> `SUCCESS` / `WARNING` / `PARTIAL` / `FAILED` / `SKIPPED_DUPLICATE` |
 | `started_at`, `finished_at`, `duration_s` | timing |
 | `rows_received`, `rows_valid`, `rows_rejected` | counts |
 | `dq_score` | data quality score (%) |
@@ -53,7 +53,9 @@ Stages 1-2 are implemented in `src/ingestion.py` (Phase 10; see
 [`ingestion.md`](ingestion.md)); stage 3 in `src/validation.py` (Phase 11; see
 [`validation.md`](validation.md)); stage 4 in `src/alteryx.py` (Phase 12; see
 [`alteryx-workflows.md`](alteryx-workflows.md)); stage 5 in `src/etl.py`
-(Phase 13; see [`star-schema-etl.md`](star-schema-etl.md)).
+(Phase 13; see [`star-schema-etl.md`](star-schema-etl.md)); stage 6 in
+`src/data_quality.py` (Phase 14; see
+[`data-quality-engine.md`](data-quality-engine.md)).
 
 | # | Stage | Reads | Writes | Notes |
 |--:|-------|-------|--------|-------|
@@ -61,22 +63,21 @@ Stages 1-2 are implemented in `src/ingestion.py` (Phase 10; see
 | 2 | **Fingerprint & register** | file bytes, `file_registry` | `file_registry`, `pipeline_runs` (RUNNING), moves file to `raw/` + `archive/` | SHA-256; duplicate hash -> `SKIPPED_DUPLICATE`, re-drop moved to `archive/`, stop |
 | 3 | **Schema validation** | `raw/` file, `config/data_contract.yaml` | `rejected_records` (structural + per-row), `pipeline_runs` (`rows_valid` / `rows_rejected`, `stage_metrics.validate`) | missing/extra/reordered columns -> reject file, `FAILED`, exit 6; bad rows -> one `rejected_records` row each, valid rows proceed. DQ *scoring* is stage 6 (Phase 14). |
 | 4 | **Alteryx ingestion & DQ workflows** | `raw/` file | `pipeline_runs.stage_metrics.alteryx_ingestion` / `.alteryx_dq`, `data/processed/<name>.json` | Phase 12 - `.yxmd` workflow when Alteryx is configured (retried <=3), else Python fallback (`verified=False`, never faked); unexpected failure -> `FAILED`, exit 7 |
-| 5 | **Alteryx / Python ETL load** | contract-valid rows | `fact_sales`, `dim_date`, `dim_customer`, `dim_product`, `dim_region`, `pipeline_runs.stage_metrics.etl` | Phase 13 - re-derives `Revenue`/`Profit` (FR-05); upserts dimensions, bulk-loads `fact_sales` in one transaction; flips the run to `SUCCESS`; load error -> retry <=3 then `FAILED`, exit 8 |
-| 6 | **Data quality engine** | loaded rows / staging | `data_quality_results`, `rejected_records` (row-level), `pipeline_runs.dq_score` | completeness, validity, uniqueness, consistency, accuracy, timeliness, referential integrity |
-| 7 | **Quality gate** | `dq_score` | `pipeline_runs.status` | `>=95` PASS, `90-94.99` WARNING (loads), `<90` REJECT (`FAILED`, alert) |
-| 8 | **SQL KPI engine** | star schema | KPI result sets (in-memory) + analytical views | Revenue, Profit, Margin, Orders, Customers, Units, AOV, Return Rate, Avg Discount, Shipping Time |
-| 9 | **Change detection** | views / KPI history | change records | day/week/month vs previous, % deltas |
-| 10 | **Anomaly detection & fusion** | KPI time series | `anomalies` | Z-score + IQR + rolling baseline + Isolation Forest -> fused result -> severity |
-| 11 | **Drift detection** | current vs baseline distributions | drift history | price/quantity/discount/shipping/category mix/region mix |
-| 12 | **Root cause & contribution** | `fact_sales` + dims | RCA results (metric, driver, evidence, contribution, confidence) | Region -> Category -> Subcategory -> Product -> Segment |
-| 13 | **Business impact** | RCA + KPIs | impact figures | expected vs actual revenue/profit, gaps, at-risk, customers/orders affected |
-| 14 | **Forecast** | KPI history | `forecast_results` | exponential smoothing, 7 & 30 days; MAE/RMSE/MAPE |
-| 15 | **Recommendations & priority** | change + RCA + impact + forecast | `recommendations` | transparent rules; priority = severity x impact x confidence (0-100) |
-| 16 | **AI evidence + explanation** | `anomalies`, `recommendations`, RCA, impact | evidence package -> AI Analyst text | LLM consumes verified evidence only; template fallback if no LLM |
-| 17 | **Visualize** | PostgreSQL + views | Streamlit pages, Power BI dataset | Power BI refresh is a documented manual/gateway step |
-| 18 | **Report** | all of the above | `reports/InsightForge_Report_DATE.xlsx`, `reports/InsightForge_Executive_Report_DATE.pdf` | - |
-| 19 | **Alert** | severity | email / Streamlit / dashboard | LOW->dashboard, MEDIUM->Streamlit, HIGH->email, CRITICAL->immediate email; SMTP failure is non-fatal |
-| 20 | **Audit** | `pipeline_runs`, all run-scoped rows | `pipeline_runs` (final status, duration), `processed/` summary | closes the run |
+| 5 | **Alteryx / Python ETL load** | contract-valid rows | `fact_sales`, `dim_date`, `dim_customer`, `dim_product`, `dim_region`, `pipeline_runs.stage_metrics.etl` | Phase 13 - re-derives `Revenue`/`Profit` (FR-05); upserts dimensions, bulk-loads `fact_sales` in one transaction; load error -> retry <=3 then `FAILED`, exit 8. Does **not** set the terminal status - stage 6 does. |
+| 6 | **Data quality engine & gate** | raw file + the stage-3 `ValidationResult` | `data_quality_results` (7 dimensions + `Overall`), `pipeline_runs.dq_score` / `.status` / `stage_metrics.dq` | Phase 14 - completeness, validity, uniqueness, consistency, accuracy, timeliness, referential integrity; overall = unweighted mean; `>=95` PASS -> `SUCCESS`, `90-94.99` WARNING -> `WARNING` (run still completed), `<90` REJECT -> `FAILED` + exit 9. **REJECT is audit-only** - it never deletes or rolls back the `fact_sales` rows stage 5 already loaded (insert-only per run; a correction is a new run). |
+| 7 | **SQL KPI engine** | star schema | KPI result sets (in-memory) + analytical views | Revenue, Profit, Margin, Orders, Customers, Units, AOV, Return Rate, Avg Discount, Shipping Time |
+| 8 | **Change detection** | views / KPI history | change records | day/week/month vs previous, % deltas |
+| 9 | **Anomaly detection & fusion** | KPI time series | `anomalies` | Z-score + IQR + rolling baseline + Isolation Forest -> fused result -> severity |
+| 10 | **Drift detection** | current vs baseline distributions | drift history | price/quantity/discount/shipping/category mix/region mix |
+| 11 | **Root cause & contribution** | `fact_sales` + dims | RCA results (metric, driver, evidence, contribution, confidence) | Region -> Category -> Subcategory -> Product -> Segment |
+| 12 | **Business impact** | RCA + KPIs | impact figures | expected vs actual revenue/profit, gaps, at-risk, customers/orders affected |
+| 13 | **Forecast** | KPI history | `forecast_results` | exponential smoothing, 7 & 30 days; MAE/RMSE/MAPE |
+| 14 | **Recommendations & priority** | change + RCA + impact + forecast | `recommendations` | transparent rules; priority = severity x impact x confidence (0-100) |
+| 15 | **AI evidence + explanation** | `anomalies`, `recommendations`, RCA, impact | evidence package -> AI Analyst text | LLM consumes verified evidence only; template fallback if no LLM |
+| 16 | **Visualize** | PostgreSQL + views | Streamlit pages, Power BI dataset | Power BI refresh is a documented manual/gateway step |
+| 17 | **Report** | all of the above | `reports/InsightForge_Report_DATE.xlsx`, `reports/InsightForge_Executive_Report_DATE.pdf` | - |
+| 18 | **Alert** | severity | email / Streamlit / dashboard | LOW->dashboard, MEDIUM->Streamlit, HIGH->email, CRITICAL->immediate email; SMTP failure is non-fatal |
+| 19 | **Audit** | `pipeline_runs`, all run-scoped rows | `pipeline_runs` (final status, duration), `processed/` summary | closes the run |
 
 ## 4. Communication between stages
 

@@ -354,6 +354,18 @@ def _run_file(monkeypatch, tmp_path, rows_or_df, name="sales_2026_02_24.csv"):
                                            "products_upserted": 0, "regions_upserted": 0,
                                            "dates_upserted": 0}),
     )
+    # Phase 14's DQ engine lands after the ETL stage; these fixtures reuse
+    # GOOD_ROW verbatim (a genuine Uniqueness violation to a real DQ engine),
+    # so give it a canned PASS report to isolate stage-3 behaviour.
+    from src.data_quality import DIMENSIONS, DqReport, DimensionResult
+    df_rows = rows_or_df if isinstance(rows_or_df, pd.DataFrame) else _frame(*rows_or_df)
+    pass_report = DqReport(
+        dimensions=tuple(DimensionResult(dimension=d, score=100.0, passed=True,
+                                         records_checked=len(df_rows), records_failed=0)
+                         for d in DIMENSIONS),
+        overall_score=100.0, gate="PASS", rows_checked=len(df_rows),
+    )
+    monkeypatch.setattr(orchestrator, "score_file", lambda *a, **k: pass_report)
     df = rows_or_df if isinstance(rows_or_df, pd.DataFrame) else _frame(*rows_or_df)
     df.to_csv(p.incoming / name, index=False)
     code = orchestrator.run_file(p.incoming / name)
@@ -366,7 +378,8 @@ def test_run_file_clean_closes_success_with_validate_metrics(monkeypatch, tmp_pa
     updates = [c[2]["sm"] for c in fake.calls
                if c[0] == "execute" and c[2] and "sm" in c[2]]
     assert updates and "validate" in updates[-1] and "ingest" in updates[-1]
-    assert any("SUCCESS" in s for s in fake.sql_of("execute"))
+    assert any(c[2].get("status") == "SUCCESS" for c in fake.calls
+              if c[0] == "execute" and c[2])
     assert not any("rejected_records" in s for s in fake.sql_of("execute"))
     assert not any("rejected_records" in s for s in fake.sql_of("execute_many"))
     assert list(p.processed.glob("*.json"))
@@ -437,7 +450,9 @@ def test_clean_file_closes_success_with_no_rejects(tmp_path, monkeypatch):
             "SELECT run_id, status, rows_rejected, stage_metrics FROM pipeline_runs "
             "WHERE file_name = :n ORDER BY run_id DESC LIMIT 1", {"n": name},
         )
-        assert row["status"] == "SUCCESS"
+        # SUCCESS or WARNING - both mean the run completed; this test is
+        # about validation, not Phase 14's data quality scoring.
+        assert row["status"] in ("SUCCESS", "WARNING")
         assert row["rows_rejected"] == 0
         assert row["stage_metrics"]["validate"]["rows_rejected"] == 0
         assert db.scalar(

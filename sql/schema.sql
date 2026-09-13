@@ -23,12 +23,15 @@
 
 -- One row per pipeline execution. Referenced by every run-scoped row so that
 -- any number can be traced back to the file and run that produced it.
+-- 'WARNING' (Phase 14: DQ score 90-94.99, run completes but is flagged) was
+-- added after the table's first release; the ALTER below widens an
+-- already-existing constraint so re-applying this file is still idempotent.
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     run_id         BIGSERIAL PRIMARY KEY,
     file_name      TEXT        NOT NULL,
     file_hash      TEXT,
     status         TEXT        NOT NULL DEFAULT 'RUNNING'
-                   CHECK (status IN ('RUNNING','SUCCESS','PARTIAL','FAILED','SKIPPED_DUPLICATE')),
+                   CHECK (status IN ('RUNNING','SUCCESS','WARNING','PARTIAL','FAILED','SKIPPED_DUPLICATE')),
     started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at    TIMESTAMPTZ,
     duration_s     NUMERIC(10,3),
@@ -40,6 +43,13 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     error          TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+DO $$
+BEGIN
+    ALTER TABLE pipeline_runs DROP CONSTRAINT IF EXISTS pipeline_runs_status_check;
+    ALTER TABLE pipeline_runs ADD CONSTRAINT pipeline_runs_status_check
+        CHECK (status IN ('RUNNING','SUCCESS','WARNING','PARTIAL','FAILED','SKIPPED_DUPLICATE'));
+END $$;
 
 -- SHA-256 fingerprint of every file ever seen. A repeat hash -> SKIPPED_DUPLICATE.
 CREATE TABLE IF NOT EXISTS file_registry (

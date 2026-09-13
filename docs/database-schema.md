@@ -96,9 +96,15 @@ Each dimension also has `first_seen_run_id` (FK → `pipeline_runs`,
 
 | Table | Grain | Purpose | Key columns |
 |-------|-------|---------|-------------|
-| `pipeline_runs` | one pipeline execution | run ledger; every run-scoped row points here | `run_id` PK, `file_name`, `file_hash`, `status` CHECK ∈ {RUNNING, SUCCESS, PARTIAL, FAILED, SKIPPED_DUPLICATE}, `started_at`, `finished_at`, `duration_s`, `rows_received/valid/rejected`, `dq_score`, `stage_metrics` JSONB, `error` |
+| `pipeline_runs` | one pipeline execution | run ledger; every run-scoped row points here | `run_id` PK, `file_name`, `file_hash`, `status` CHECK ∈ {RUNNING, SUCCESS, WARNING, PARTIAL, FAILED, SKIPPED_DUPLICATE}, `started_at`, `finished_at`, `duration_s`, `rows_received/valid/rejected`, `dq_score`, `stage_metrics` JSONB, `error` |
 | `file_registry` | one distinct file (by hash) | SHA-256 dedupe | `file_id` PK, `file_hash` UNIQUE, `file_name`, `file_size_bytes`, `row_count`, `first_seen_run_id` |
 | `data_quality_results` | one DQ dimension per run | 7 dimensions + an `Overall` row | `dq_id` PK, `run_id` FK, `dimension`, `score`, `passed`, `records_checked/failed`, `detail` JSONB, `UNIQUE (run_id, dimension)` |
+
+`WARNING` (Phase 14: DQ score 90-94.99 - the run completed but is flagged)
+was added to `status`'s CHECK constraint after this table's first release;
+`sql/schema.sql` widens an already-existing table's constraint idempotently
+via `ALTER TABLE ... DROP CONSTRAINT IF EXISTS ... ADD CONSTRAINT ...`, so
+re-running `scripts/apply_schema.py` picks it up on a pre-Phase-14 database.
 | `rejected_records` | one rejected source row | nothing dropped silently (FR-07) | `rejected_id` PK, `run_id` FK, `source_row_number`, `order_id`, `rejection_category`, `rejection_reason`, `dq_dimension`, `raw_record` JSONB |
 | `anomalies` | one metric / date / grain | fused detector output + severity | `anomaly_id` PK, `run_id` FK, `metric`, `anomaly_date`, `grain`, `observed/expected_value`, `deviation_pct`, `direction`, `{zscore,iqr,rolling,iforest}_flag`, `detector_votes`, `confidence`, `severity` CHECK ∈ {LOW, MEDIUM, HIGH, CRITICAL}, `persistence_days`, `detail` JSONB |
 | `recommendations` | one recommendation | rule-based, prioritised | `recommendation_id` PK, `run_id` FK, `title`, `rationale`, `rule_id`, `linked_anomaly_id` FK → `anomalies` (SET NULL), `severity`, `impact_value`, `confidence`, `priority_score` CHECK 0-100, `priority_band`, `status` |

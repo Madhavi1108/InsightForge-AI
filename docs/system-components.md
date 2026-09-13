@@ -58,9 +58,10 @@
   `columns` (order enforced) + `allow_extra_columns`, `mandatory` set, per-field
   `type` / `pattern` / `min`-`max` / `values` / `nullable` / length, and the
   `Category->Sub_Category` / `Region->State->City` hierarchies. `uniqueness` is
-  declared but scored by Phase 14, not this validator.
-- **Consumed by**: `src/validation.py` (and later the Phase 14 data-quality
-  engine and the Alteryx data-quality workflow).
+  declared but scored by the Phase 14 data-quality engine, not this validator.
+- **Consumed by**: `src/validation.py`, the Phase 14 data-quality engine
+  (`src/data_quality.py`), and the Alteryx data-quality workflow
+  (`src/alteryx.py`, Phase 12).
 
 ### `src/validation.py` (Phase 11 - **delivered**)
 - **Responsibility**: enforce the contract - `get_contract()` +
@@ -76,7 +77,8 @@
   -> one `rejected_records` row per bad data-row (raw row as JSONB) + run
   `PARTIAL` with `rows_valid` / `rows_rejected`.
 - **Failure behaviour**: structural failure -> run `FAILED`; never loads an
-  invalid schema. The 7-dimension DQ score and PASS/WARN/REJECT gate are Phase 14.
+  invalid schema. The 7-dimension DQ score and PASS/WARN/REJECT gate are the
+  Phase 14 data quality engine (below).
 
 ## ETL
 
@@ -96,7 +98,8 @@
   - *Phase 13* (`src/etl.py`): clean records, re-derive `Revenue` and
     `Profit` (FR-05 - never trusts the CSV), upsert `dim_customer` /
     `dim_product` / `dim_region` / `dim_date`, bulk-load `fact_sales` inside
-    one transaction, flip `pipeline_runs.status` to `SUCCESS`.
+    one transaction. Does not set the run's terminal status - that's the
+    Phase 14 data quality gate (below).
 - **Inputs**: validated daily file (`data/raw/<name>.csv`, post Phase 11).
 - **Outputs (Phase 12)**: `stage_metrics.alteryx_ingestion` /
   `stage_metrics.alteryx_dq` on `pipeline_runs`; the same two keys in
@@ -107,6 +110,35 @@
   against the real engine first when configured); an unexpected error in the
   Phase 12 workflow stage closes the run `FAILED` (exit code 7); a Phase 13
   load error is retried <=3 times then closes the run `FAILED` (exit code 8).
+
+## Data quality
+
+### `src/data_quality.py` (Phase 14 - **delivered**)
+- **Responsibility**: score the file across 7 dimensions - Completeness,
+  Validity, Referential Integrity (reusing Phase 11's
+  `ValidationResult.row_violations`, grouped by
+  `src.validation.DQ_DIMENSION_BY_CATEGORY`), Uniqueness (full-row duplicates
+  per the contract's declared `uniqueness: {row: all_columns}`), Consistency
+  (`Revenue`/`Profit` re-derivation via `src.etl.recompute_revenue_profit`),
+  Accuracy (`Order_Status`<->`Shipping_Days`), and Timeliness (`Order_Date`
+  vs. the `sales_YYYY_MM_DD.csv` batch date, skipped for non-standard
+  filenames) - then classifies the gate. The master spec names the
+  dimensions/thresholds but not the formulas or weighting; this project's
+  own operational definitions are documented in
+  [`data-quality-engine.md`](data-quality-engine.md).
+- **API**: `DIMENSIONS`, `DimensionResult`, `DqReport`, `thresholds()`,
+  `score_file(csv_path, vres, contract=None) -> DqReport`. Pure - no
+  database access.
+- **Inputs**: the raw file (`data/raw/<name>.csv`) + the `ValidationResult`
+  Phase 11 already computed for it.
+- **Outputs**: one `data_quality_results` row per dimension plus one
+  `'Overall'` row (8 total); `pipeline_runs.dq_score` and the run's terminal
+  `status` (`>=95` PASS -> `SUCCESS`, `90-94.99` WARNING -> `WARNING`, `<90`
+  REJECT -> `FAILED`).
+- **Failure behaviour**: REJECT is **audit-only** - it marks the run
+  `FAILED` (exit code 9) and never deletes or rolls back `fact_sales`/
+  dimension rows Phase 13 already committed (`fact_sales` is insert-only per
+  run; a correction is a new run).
 
 ## Storage
 

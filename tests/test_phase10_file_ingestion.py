@@ -477,11 +477,15 @@ def test_run_file_closes_run_as_success(tmp_path, monkeypatch):
             "SELECT status, error, stage_metrics FROM pipeline_runs "
             "WHERE file_name = :n ORDER BY run_id DESC LIMIT 1", {"n": name},
         )
-        assert row["status"] == "SUCCESS"
+        # SUCCESS or WARNING - both mean the run completed (Phase 14's DQ
+        # gate only fails a run below DQ_WARN_THRESHOLD); this test is about
+        # ingestion, not data quality scoring.
+        assert row["status"] in ("SUCCESS", "WARNING")
         assert row["error"] is None
         assert "ingest" in json.dumps(row["stage_metrics"])
         assert "validate" in json.dumps(row["stage_metrics"])
         assert "etl" in json.dumps(row["stage_metrics"])
+        assert "dq" in json.dumps(row["stage_metrics"])
         assert (p.processed / f"{SENTINEL}_c.json").is_file()
     finally:
         # fact_sales rows cascade-delete with their pipeline_runs row.

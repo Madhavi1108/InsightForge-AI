@@ -6,13 +6,19 @@ Both entry points - the ``watchdog`` watcher and ``run_pipeline.py`` - call
 
 Working stages: **ingestion** (``src/ingestion.py``), **schema validation**
 (``src/validation.py``, Phase 11), the **Alteryx ingestion / data-quality
-workflows** (``src/alteryx.py``, Phase 12), and the **star-schema load**
-(``src/etl.py``, Phase 13). A file that clears every stage closes ``SUCCESS``.
+workflows** (``src/alteryx.py``, Phase 12), the **star-schema load**
+(``src/etl.py``, Phase 13), and the **data quality engine & gate**
+(``src/data_quality.py``, Phase 14). The gate gives the run its terminal
+status: ``>=95`` score -> ``SUCCESS``, ``90-94.99`` -> ``WARNING`` (the run
+still completed), ``<90`` -> ``FAILED`` - an audit-only REJECT that never
+deletes or rolls back rows Phase 13 already loaded into ``fact_sales``.
 
-Exit codes: ``0`` ok, ``2`` no mode chosen, ``3`` nothing to do / mode not built
-yet, ``4`` database unavailable, ``5`` a file failed ingestion, ``6`` a file
-failed schema validation (rejected), ``7`` the Alteryx/DQ workflow stage
-raised unexpectedly, ``8`` the star-schema load failed after retries.
+Exit codes: ``0`` ok (includes a DQ ``WARNING``), ``2`` no mode chosen,
+``3`` nothing to do / mode not built yet, ``4`` database unavailable, ``5`` a
+file failed ingestion, ``6`` a file failed schema validation (rejected),
+``7`` the Alteryx/DQ workflow stage raised unexpectedly, ``8`` the
+star-schema load failed after retries, ``9`` the data-quality gate rejected
+the run (score < ``DQ_WARN_THRESHOLD``).
 """
 from __future__ import annotations
 
@@ -29,6 +35,7 @@ from dataclasses import asdict
 from src import ingestion
 from src.alteryx import run_data_quality_workflow, run_ingestion_workflow
 from src.config import get_alteryx_settings, get_paths
+from src.data_quality import DIMENSIONS, DqReport, score_file, thresholds
 from src.database import Database, DatabaseError
 from src.etl import EtlLoadError, run_sales_etl_workflow
 from src.ingestion import IngestionError, IngestionResult, ingest_file
@@ -46,7 +53,8 @@ def _configure_logging() -> None:
 
 
 def _write_processed_summary(processed_dir: Path, result: IngestionResult,
-                             vres: ValidationResult, stage_metrics: dict) -> None:
+                             vres: ValidationResult, stage_metrics: dict,
+                             status: str) -> None:
     processed_dir.mkdir(parents=True, exist_ok=True)
     summary = {
         "run_id": result.run_id,
@@ -58,10 +66,28 @@ def _write_processed_summary(processed_dir: Path, result: IngestionResult,
         "alteryx_ingestion": stage_metrics.get("alteryx_ingestion"),
         "alteryx_dq": stage_metrics.get("alteryx_dq"),
         "etl": stage_metrics.get("etl"),
-        "status": "SUCCESS",
+        "dq": stage_metrics.get("dq"),
+        "status": status,
     }
     out = processed_dir / f"{Path(result.file_name).stem}.json"
     out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+
+def _dq_result_params(run_id: int, report: DqReport) -> list[dict]:
+    params = [
+        {"run": run_id, "dim": d.dimension, "score": d.score, "passed": d.passed,
+         "checked": d.records_checked, "failed": d.records_failed,
+         "detail": json.dumps(d.detail, ensure_ascii=False)}
+        for d in report.dimensions
+    ]
+    params.append({
+        "run": run_id, "dim": "Overall", "score": report.overall_score,
+        "passed": report.gate != "REJECT", "checked": report.rows_checked,
+        "failed": sum(d.records_failed for d in report.dimensions),
+        "detail": json.dumps({"gate": report.gate, "dimensions": list(DIMENSIONS)},
+                             ensure_ascii=False),
+    })
+    return params
 
 
 def _reject_structural(db: Database, run_id: int, reason: str) -> None:
@@ -204,23 +230,42 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
 
     stage_metrics = {**alteryx_metrics, "etl": asdict(etl_result)}
 
+    # Stage 6 - data quality engine, score & gate (Phase 14)
+    dq_report = score_file(result.raw_path, vres)
+    stage_metrics["dq"] = {
+        "overall_score": dq_report.overall_score, "gate": dq_report.gate,
+        "dimensions": {d.dimension: d.score for d in dq_report.dimensions},
+    }
+    status = {"PASS": "SUCCESS", "WARNING": "WARNING", "REJECT": "FAILED"}[dq_report.gate]
+    error = (f"data quality gate rejected the run: overall score "
+             f"{dq_report.overall_score} < {thresholds()[1]}" if dq_report.gate == "REJECT"
+             else None)
+
     elapsed = round(time.monotonic() - started, 3)
+    db.execute_many(
+        "INSERT INTO data_quality_results "
+        "(run_id, dimension, score, passed, records_checked, records_failed, detail) "
+        "VALUES (:run, :dim, :score, :passed, :checked, :failed, CAST(:detail AS JSONB))",
+        _dq_result_params(result.run_id, dq_report),
+    )
     db.execute(
-        "UPDATE pipeline_runs SET status='SUCCESS', finished_at=now(), "
+        "UPDATE pipeline_runs SET status=:status, finished_at=now(), "
         "duration_s=:d, rows_received=:rr, rows_valid=:rv, rows_rejected=:rj, "
-        "error=NULL, stage_metrics=CAST(:sm AS JSONB) WHERE run_id=:r",
-        {"d": elapsed, "rr": result.metadata.row_count, "rv": vres.rows_valid,
-         "rj": vres.rows_rejected,
+        "dq_score=:dq, error=:e, stage_metrics=CAST(:sm AS JSONB) WHERE run_id=:r",
+        {"status": status, "d": elapsed, "rr": result.metadata.row_count,
+         "rv": vres.rows_valid, "rj": vres.rows_rejected, "dq": dq_report.overall_score,
+         "e": error,
          "sm": json.dumps({"ingest": ingest_metrics, "validate": validate_metrics,
                            **stage_metrics}),
          "r": result.run_id},
     )
-    _write_processed_summary(paths.processed, result, vres, stage_metrics)
-    print(f"[ok] {result.file_name}: run {result.run_id} - "
-          f"{vres.rows_valid} valid / {vres.rows_rejected} rejected - "
+    _write_processed_summary(paths.processed, result, vres, stage_metrics, status)
+    print(f"[{'error' if dq_report.gate == 'REJECT' else 'ok'}] {result.file_name}: "
+          f"run {result.run_id} - {vres.rows_valid} valid / {vres.rows_rejected} rejected - "
           f"alteryx {ing_wf.engine}/{dq_wf.engine}, etl {etl_result.engine} "
-          f"({etl_result.summary.get('rows_loaded', 0)} rows loaded) - SUCCESS")
-    return 0
+          f"({etl_result.summary.get('rows_loaded', 0)} rows loaded) - "
+          f"DQ {dq_report.overall_score} ({dq_report.gate}) - {status}")
+    return 9 if dq_report.gate == "REJECT" else 0
 
 
 def scan(*, dry_run: bool = False) -> int:

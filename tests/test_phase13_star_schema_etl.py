@@ -330,6 +330,18 @@ def _run_file(monkeypatch, tmp_path, rows, name="sales_2026_02_24.csv", etl_outc
         return etl_outcome
 
     monkeypatch.setattr(orchestrator, "run_sales_etl_workflow", _etl_stub)
+    # Phase 14's DQ engine lands after the ETL stage; these tests exercise
+    # only stages 1-5, so give it a canned PASS report (GOOD_ROW here has
+    # deliberately-wrong Revenue/Profit for Phase 13's own recompute test,
+    # which would otherwise tank the real DQ score).
+    from src.data_quality import DIMENSIONS, DqReport, DimensionResult
+    pass_report = DqReport(
+        dimensions=tuple(DimensionResult(dimension=d, score=100.0, passed=True,
+                                         records_checked=len(rows), records_failed=0)
+                         for d in DIMENSIONS),
+        overall_score=100.0, gate="PASS", rows_checked=len(rows),
+    )
+    monkeypatch.setattr(orchestrator, "score_file", lambda *a, **k: pass_report)
     _frame(*rows).to_csv(p.incoming / name, index=False)
     code = orchestrator.run_file(p.incoming / name)
     return code, fake, p
@@ -341,7 +353,8 @@ def test_run_file_success_closes_success_with_etl_metrics(monkeypatch, tmp_path)
     assert code == 0
     updates = [c[2]["sm"] for c in fake.calls if c[0] == "execute" and c[2] and "sm" in c[2]]
     assert updates and "etl" in updates[-1] and "rows_loaded" in updates[-1]
-    assert any("SUCCESS" in s for s in fake.sql_of("execute"))
+    assert any(c[2].get("status") == "SUCCESS" for c in fake.calls
+              if c[0] == "execute" and c[2])
     assert not any("PARTIAL" in s for s in fake.sql_of("execute"))
 
     files = list(p.processed.glob("*.json"))
@@ -396,7 +409,9 @@ def test_clean_file_loads_fact_sales_and_closes_success(tmp_path, monkeypatch):
             "SELECT run_id, status, stage_metrics FROM pipeline_runs "
             "WHERE file_name = :n ORDER BY run_id DESC LIMIT 1", {"n": name},
         )
-        assert row["status"] == "SUCCESS"
+        # SUCCESS or WARNING - both mean the load succeeded; this test is
+        # about the ETL load, not Phase 14's data quality scoring.
+        assert row["status"] in ("SUCCESS", "WARNING")
         assert "etl" in row["stage_metrics"]
         loaded = db.scalar(
             "SELECT count(*) FROM fact_sales WHERE run_id = :r", {"r": row["run_id"]}

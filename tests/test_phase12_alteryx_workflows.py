@@ -295,6 +295,16 @@ def _stub_etl_result():
                               "dates_upserted": 0})
 
 
+def _stub_dq_report(rows):
+    from src.data_quality import DIMENSIONS, DqReport, DimensionResult
+    return DqReport(
+        dimensions=tuple(DimensionResult(dimension=d, score=100.0, passed=True,
+                                         records_checked=len(rows), records_failed=0)
+                         for d in DIMENSIONS),
+        overall_score=100.0, gate="PASS", rows_checked=len(rows),
+    )
+
+
 def _run_file(monkeypatch, tmp_path, rows, name="sales_2026_02_24.csv"):
     from src import orchestrator
     p = _paths(tmp_path)
@@ -305,6 +315,10 @@ def _run_file(monkeypatch, tmp_path, rows, name="sales_2026_02_24.csv"):
     # these tests exercise only the Phase 12 Alteryx stage against a stub DB.
     monkeypatch.setattr(orchestrator, "run_sales_etl_workflow",
                         lambda *a, **k: _stub_etl_result())
+    # Phase 14's DQ engine lands after the ETL stage; these fixtures reuse
+    # GOOD_ROW verbatim (a genuine Uniqueness violation to a real DQ engine),
+    # so give it a canned PASS report to isolate the Alteryx stage.
+    monkeypatch.setattr(orchestrator, "score_file", lambda *a, **k: _stub_dq_report(rows))
     _frame(*rows).to_csv(p.incoming / name, index=False)
     code = orchestrator.run_file(p.incoming / name)
     return code, fake, p
@@ -318,7 +332,8 @@ def test_run_file_adds_alteryx_stage_metrics_and_succeeds(monkeypatch, tmp_path)
     last = updates[-1]
     assert "alteryx_ingestion" in last and "alteryx_dq" in last
     assert '"engine": "python_fallback"' in last
-    assert any("SUCCESS" in s for s in fake.sql_of("execute"))
+    assert any(c[2].get("status") == "SUCCESS" for c in fake.calls
+              if c[0] == "execute" and c[2])
 
 
 def test_run_file_processed_summary_includes_alteryx_keys(monkeypatch, tmp_path):
