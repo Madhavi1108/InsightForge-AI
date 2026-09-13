@@ -35,7 +35,7 @@ dropped). Current progress is tracked in
 | 1 | 1-6 | Architecture, requirements, dataset, generation | **Complete** |
 | 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | **Complete** |
 | 3 | 15-17 | SQL / KPIs / views / change detection | **Complete** |
-| 4 | 18-23 | Anomaly / drift / RCA / impact | Phase 18 of 6 complete |
+| 4 | 18-23 | Anomaly / drift / RCA / impact | Phases 18-19 of 6 complete |
 | 5 | 24-26 | RFM / product intel / forecast / recommendations | Not started |
 | 6 | 27-35 | AI Analyst / NL-to-SQL / Streamlit / Power BI / reporting / alerts / observability | Not started |
 | 7 | 36 | Security / testing / performance / final demo | Not started |

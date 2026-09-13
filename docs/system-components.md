@@ -218,17 +218,26 @@
 ## Intelligence
 
 ### Anomaly detection (Phase 18-20)
-- **`src/anomaly_detection.py`** (Phase 18 - **delivered**): **Z-score**
-  (population mean/std over the daily series, `ZSCORE_THRESHOLD` default
-  3.0) and **IQR** (Q1/Q3/IQR/bounds via `numpy.percentile`, `IQR_MULTIPLIER`
-  default 1.5), both pure functions (`detect_zscore`/`detect_iqr`) plus a
-  thin `fact_sales`-querying wrapper (`detect_all_zscore`/`detect_all_iqr`).
-  Runs against the same daily KPI time series `src.change_detection` already
-  computes. Not persisted - the `anomalies` table's fusion/severity columns
-  (`detector_votes`, `confidence`, `severity`) don't apply per-detector.
-- **rolling baseline** (mean/median/std vs expected range) and
-  **Isolation Forest** (`sklearn`, anomaly score + prediction + confidence) -
-  new Phase 19, same module.
+- **`src/anomaly_detection.py`** (Phases 18-19 - **delivered**): all four
+  FR-11 detectors, pure functions plus thin `fact_sales`-querying wrappers,
+  all running against the same daily KPI time series `src.change_detection`
+  already computes:
+  - **Z-score** - population mean/std over the whole daily series,
+    `ZSCORE_THRESHOLD` default 3.0 (`detect_zscore`/`detect_all_zscore`).
+  - **IQR** - Q1/Q3/IQR/bounds via `numpy.percentile`, `IQR_MULTIPLIER`
+    default 1.5 (`detect_iqr`/`detect_all_iqr`).
+  - **Rolling baseline** - trailing `ROLLING_WINDOW_DAYS` (default 7)
+    mean/median/std, `ROLLING_BASELINE_MULTIPLIER` (default 2.0) band -
+    deliberately causal/trailing, unlike Z-score/IQR's whole-series baseline
+    (`detect_rolling_baseline`/`detect_all_rolling_baseline`).
+  - **Isolation Forest** - `sklearn.ensemble.IsolationForest` on the
+    metric's own daily values, `IFOREST_CONTAMINATION` default `"auto"`,
+    fixed `IFOREST_RANDOM_STATE` (default 42) for determinism; anomaly score
+    = negated `decision_function`, confidence = a logistic squash of it -
+    this project's own mapping, not an sklearn built-in
+    (`detect_isolation_forest`/`detect_all_isolation_forest`).
+  - Not persisted - the `anomalies` table's fusion/severity columns
+    (`detector_votes`, `confidence`, `severity`) don't apply per-detector.
 - **Anomaly fusion**: combine the four detectors into one unified result per
   metric/date; persist to `anomalies` - new Phase 20.
 - **Severity engine**: classify LOW / MEDIUM / HIGH / CRITICAL from percentage
