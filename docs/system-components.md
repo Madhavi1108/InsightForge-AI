@@ -293,12 +293,29 @@
   from `src/orchestrator.py` (same reasoning as Phase 17/22). Called later
   by recommendations, the AI Analyst, or a Streamlit page.
 
-### Customer & product intelligence (new Phase 24)
-- **RFM**: Recency / Frequency / Monetary -> Champions, Loyal, Potential
-  Loyalists, New, At Risk, Lost.
-- **Product intelligence**: classify Star / High Profit / High Revenue / Fast
-  Growing / Declining / High Return / Low Margin / Slow Moving; product health
-  score.
+### Customer & product intelligence (Phase 24 - **delivered**)
+- **`src/rfm.py`** - Recency (days since last order vs. `MAX(order_date)`,
+  never wall-clock) / Frequency (distinct orders) / Monetary (revenue),
+  each quintile-scored 1-5 (`numpy.percentile`-based); a priority-ordered
+  rule (`classify_segment`) maps every `(r,f,m)` combination to exactly one
+  of Champions / Loyal / Potential Loyalists / New / At Risk / Lost - no
+  "Other" fallback. API: `score_quintiles`, `classify_segment`,
+  `build_customer_rfm` (pure), `analyze_customer_rfm(db,
+  reference_date=None)`.
+- **`src/product_intelligence.py`** - reuses `product_performance` (Phase
+  16) for revenue/profit/margin/units/return-rate; adds a trailing-vs-prior
+  `PRODUCT_GROWTH_WINDOW_DAYS`-day revenue comparison for growth. Quartile-
+  relative flags (High Revenue/Profit/Return, Low Margin, Slow Moving,
+  Fast Growing/Declining via `PRODUCT_GROWTH_THRESHOLD_PCT`); Star = high
+  revenue + high profit + fast growing. Health score (0-100) = weighted
+  composite of profit/margin/growth/return percentile ranks
+  (0.35/0.25/0.20/0.20), same shape as Phase 20's severity engine. API:
+  `percentile_rank`, `classify_products` (pure),
+  `analyze_product_intelligence(db, ...)`.
+- **Wiring**: both pure, on-demand - no database writes, no new table, not
+  called from `src/orchestrator.py` (same reasoning as Phase 17/22/23).
+  Called later by recommendations, the AI Analyst, or Streamlit
+  Customers/Products pages.
 
 ### `src/forecasting.py` (new Phase 25)
 - **Responsibility**: exponential smoothing forecasts for revenue, profit, orders
