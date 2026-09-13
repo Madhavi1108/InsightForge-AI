@@ -175,14 +175,27 @@
 
 ## Analytics
 
-### `sql/kpi_queries.sql` + `sql/views.sql` (new Phase 15-16)
-- **Responsibility**: Revenue, Profit, Margin, Orders, Customers, Units, AOV,
-  Return Rate, Average Discount, Shipping Time; advanced SQL (JOIN, CASE, CTE,
-  subqueries, window functions, RANK/DENSE_RANK, LAG/LEAD, rolling average,
-  running total); views `daily_kpis`, `monthly_kpis`, `regional_performance`,
-  `category_performance`, `product_performance`, `customer_performance`.
+### `sql/kpi_queries.sql` (Phase 15 - **delivered**)
+- **Responsibility**: 10 standalone queries computing Revenue, Profit,
+  Margin, Orders, Customers, Units, AOV, Return Rate, Average Discount,
+  Shipping Time across the 6 grains FR-08 requires (day/month/region/
+  category/product/customer), demonstrating every named advanced-SQL
+  technique (JOIN, CASE, CTE, subqueries, window functions, RANK/DENSE_RANK,
+  LAG/LEAD, rolling average, running total). Formulas are this project's own
+  operational definition - the spec names the metrics/techniques but not the
+  formulas (`docs/kpi-engine.md`). Each query is preceded by a
+  `-- @query: <name>` marker so it can be run/parsed independently.
+- **Inputs**: star schema (`fact_sales` + dims).
+- **Outputs**: KPI result sets consumed by intelligence, reporting, BI, and
+  Phase 16's views (below), which wrap the same calculations by grain.
+
+### `sql/views.sql` (new Phase 16)
+- **Responsibility**: PostgreSQL views `daily_kpis`, `monthly_kpis`,
+  `regional_performance`, `category_performance`, `product_performance`,
+  `customer_performance` - persistent, queryable wrappers around Phase 15's
+  calculations.
 - **Inputs**: star schema.
-- **Outputs**: KPI result sets consumed by intelligence, reporting, BI.
+- **Outputs**: views consumed by intelligence, reporting, BI.
 
 ### `src/change_detection.py` (new Phase 17)
 - **Responsibility**: period comparison (day/week/month vs previous) and
