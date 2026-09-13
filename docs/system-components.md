@@ -80,32 +80,33 @@
 
 ## ETL
 
-### Alteryx workflows + Python fallback (Phase 12-13)
+### Alteryx workflows + Python fallback (Phase 12-13 - **delivered**)
 - **Artifacts**: `alteryx/01_ingestion.yxmd`, `alteryx/02_data_quality.yxmd`
-  (Phase 12 - **delivered**), `alteryx/03_sales_etl.yxmd`,
-  `alteryx/04_customer_product_etl.yxmd` (Phase 13 - not built); plus a
-  Python ETL module producing **identical contract output** when Alteryx is not
-  installed (`ALTERYX_ENGINE_CMD` blank).
+  (Phase 12), `alteryx/03_sales_etl.yxmd`, `alteryx/04_customer_product_etl.yxmd`
+  (Phase 13) - hand-authored, valid Alteryx XML, not executed against a real
+  engine (none installed in this environment); plus a Python ETL module
+  producing **identical contract output** when Alteryx is not installed
+  (`ALTERYX_ENGINE_CMD` blank).
 - **Responsibility split**:
   - *Phase 12* (`src/alteryx.py`, `src/config.py::AlteryxSettings`):
     re-affirm structural contract compliance and run the per-row data-quality
     check as an Alteryx-workflow-shaped stage 4, reporting engine used
     (`alteryx` / `python_fallback`) and whether it was `verified`. Does not
     touch the star schema.
-  - *Phase 13* (not started): clean records, standardise text, derive
-    `Revenue` and `Profit`, join/prepare `dim_customer` / `dim_product` /
-    `dim_region` / `dim_date`, load `fact_sales` and dimensions into
-    PostgreSQL, flip `pipeline_runs.status` to `SUCCESS`.
+  - *Phase 13* (`src/etl.py`): clean records, re-derive `Revenue` and
+    `Profit` (FR-05 - never trusts the CSV), upsert `dim_customer` /
+    `dim_product` / `dim_region` / `dim_date`, bulk-load `fact_sales` inside
+    one transaction, flip `pipeline_runs.status` to `SUCCESS`.
 - **Inputs**: validated daily file (`data/raw/<name>.csv`, post Phase 11).
 - **Outputs (Phase 12)**: `stage_metrics.alteryx_ingestion` /
   `stage_metrics.alteryx_dq` on `pipeline_runs`; the same two keys in
   `data/processed/<name>.json`.
-- **Outputs (Phase 13, pending)**: populated star schema.
+- **Outputs (Phase 13)**: populated star schema; `stage_metrics.etl`.
 - **Failure behaviour**: engine missing/misconfigured -> Python fallback
   (logged as unverified Alteryx execution, not faked, retried <=3 attempts
   against the real engine first when configured); an unexpected error in the
-  Phase 12 workflow stage closes the run `FAILED` (exit code 7). Phase 13's
-  load error -> retry (<=3) then stage `FAILED` (not yet implemented).
+  Phase 12 workflow stage closes the run `FAILED` (exit code 7); a Phase 13
+  load error is retried <=3 times then closes the run `FAILED` (exit code 8).
 
 ## Storage
 

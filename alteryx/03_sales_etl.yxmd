@@ -1,0 +1,162 @@
+<?xml version="1.0"?>
+<AlteryxDocument yxmdVer="2023.1">
+  <Nodes>
+    <Node ToolID="1">
+      <GuiSettings Plugin="AlteryxBasePluginsGui.DbFileInput.DbFileInput">
+        <Position x="54" y="54" />
+      </GuiSettings>
+      <Properties>
+        <Configuration>
+          <!-- Input CSV path is supplied at run time via the engine command
+               line (see src/etl.py::run_sales_etl_workflow); this literal
+               value is a development-time placeholder only. -->
+          <File RecordLimit="" SearchSubDirs="False">data\raw\*.csv</File>
+          <FormatSpecificOptions>
+            <CodePage>28591</CodePage>
+            <Delimeter>,</Delimeter>
+            <IgnoreErrors>False</IgnoreErrors>
+            <FieldLen>254</FieldLen>
+            <AllowShareWrite>False</AllowShareWrite>
+            <HeaderRow>True</HeaderRow>
+            <IgnoreQuotes>DoubleQuotes</IgnoreQuotes>
+          </FormatSpecificOptions>
+        </Configuration>
+        <Annotation DisplayMode="0">
+          <Name>Raw daily CSV (data/raw/)</Name>
+          <DefaultAnnotationText>Only contract-valid rows reach fact_sales; rejected rows are filtered upstream by 02_data_quality.yxmd / src/validation.py</DefaultAnnotationText>
+        </Annotation>
+      </Properties>
+      <EngineSettings Macro="" Module="AlteryxBasePluginsEngine.dll" DllEntryPoint="AlteryxDbFileInput" />
+    </Node>
+    <Node ToolID="2">
+      <GuiSettings Plugin="AlteryxBasePluginsGui.Formula.Formula">
+        <Position x="174" y="54" />
+      </GuiSettings>
+      <Properties>
+        <Configuration>
+          <FormulaFields>
+            <FormulaField expression="ROUND(ToNumber([Quantity]) * ToNumber([Unit_Price]) * (1 - ToNumber([Discount])), 2)" field="Revenue_Derived" size="14" type="FixedDecimal" />
+            <FormulaField expression="ROUND([Revenue_Derived] - ToNumber([Cost]), 2)" field="Profit_Derived" size="14" type="FixedDecimal" />
+          </FormulaFields>
+        </Configuration>
+        <Annotation DisplayMode="0">
+          <Name>Re-derive Revenue / Profit (FR-05)</Name>
+          <DefaultAnnotationText>Never trusts the CSV's own Revenue/Profit columns - mirrors src/etl.py::recompute_revenue_profit</DefaultAnnotationText>
+        </Annotation>
+      </Properties>
+      <EngineSettings Macro="" Module="AlteryxBasePluginsEngine.dll" DllEntryPoint="AlteryxFormula" />
+    </Node>
+    <Node ToolID="3">
+      <GuiSettings Plugin="AlteryxBasePluginsGui.AlteryxSelect.AlteryxSelect">
+        <Position x="294" y="54" />
+      </GuiSettings>
+      <Properties>
+        <Configuration>
+          <SelectFields>
+            <SelectField field="Order_ID" selected="True" />
+            <SelectField field="Order_Date" selected="True" />
+            <SelectField field="Customer_ID" selected="True" />
+            <SelectField field="Product_ID" selected="True" />
+            <SelectField field="Region" selected="True" />
+            <SelectField field="State" selected="True" />
+            <SelectField field="City" selected="True" />
+            <SelectField field="Category" selected="True" />
+            <SelectField field="Sub_Category" selected="True" />
+            <SelectField field="Customer_Segment" selected="True" />
+            <SelectField field="Quantity" selected="True" />
+            <SelectField field="Unit_Price" selected="True" />
+            <SelectField field="Discount" selected="True" />
+            <SelectField field="Revenue_Derived" rename="Revenue" selected="True" />
+            <SelectField field="Cost" selected="True" />
+            <SelectField field="Profit_Derived" rename="Profit" selected="True" />
+            <SelectField field="Payment_Method" selected="True" />
+            <SelectField field="Shipping_Days" selected="True" />
+            <SelectField field="Order_Status" selected="True" />
+            <SelectField field="Return_Status" selected="True" />
+            <SelectField field="Revenue" selected="False" />
+            <SelectField field="Profit" selected="False" />
+          </SelectFields>
+        </Configuration>
+        <Annotation DisplayMode="0">
+          <Name>Shape the fact_sales row</Name>
+          <DefaultAnnotationText>Drops the original CSV Revenue/Profit, keeps the re-derived values; dimension surrogate keys are resolved by the Postgres output tool's lookup (dim_customer/dim_product/dim_region/dim_date already populated by 04_customer_product_etl.yxmd)</DefaultAnnotationText>
+        </Annotation>
+      </Properties>
+      <EngineSettings Macro="" Module="AlteryxBasePluginsEngine.dll" DllEntryPoint="AlteryxSelect" />
+    </Node>
+    <Node ToolID="4">
+      <GuiSettings Plugin="AlteryxBasePluginsGui.DbFileOutput.DbFileOutput">
+        <Position x="414" y="54" />
+      </GuiSettings>
+      <Properties>
+        <Configuration>
+          <!-- Real deployment: an ODBC/OLEDB Postgres connection to
+               fact_sales (append). Not executed in this environment - see
+               docs/star-schema-etl.md - so this stays a CSV mirror of the
+               intended output shape. -->
+          <File>data\processed\03_sales_etl_fact_sales.csv</File>
+          <FormatSpecificOptions>
+            <LineEndStyle>CRLF</LineEndStyle>
+            <Delimeter>,</Delimeter>
+            <ForceQuotes>False</ForceQuotes>
+            <HeaderRow>True</HeaderRow>
+            <CodePage>28591</CodePage>
+          </FormatSpecificOptions>
+        </Configuration>
+        <Annotation DisplayMode="0">
+          <Name>fact_sales rows</Name>
+        </Annotation>
+      </Properties>
+      <EngineSettings Macro="" Module="AlteryxBasePluginsEngine.dll" DllEntryPoint="AlteryxDbFileOutput" />
+    </Node>
+  </Nodes>
+  <Connections>
+    <Connection>
+      <Origin ToolID="1" Connection="Output" />
+      <Destination ToolID="2" Connection="Input" />
+    </Connection>
+    <Connection>
+      <Origin ToolID="2" Connection="Output" />
+      <Destination ToolID="3" Connection="Input" />
+    </Connection>
+    <Connection>
+      <Origin ToolID="3" Connection="Output" />
+      <Destination ToolID="4" Connection="Input" />
+    </Connection>
+  </Connections>
+  <Properties>
+    <Memory default="True" />
+    <GlobalRecordLimit value="0" />
+    <TempFiles default="True" />
+    <Annotation on="True" includeToolName="False" />
+    <ConvErrorLimit value="10" />
+    <ConvErrorLimit_Stop value="False" />
+    <CancelOnError value="False" />
+    <DisableBrowse value="False" />
+    <EnablePerformanceProfiling value="False" />
+    <DisableAllOutput value="False" />
+    <ShowAllMacroMessages value="False" />
+    <ShowConnectionStatusIsOn value="True" />
+    <ShowConnectionStatusOnlyWhenRunning value="True" />
+    <ZoomLevel value="0" />
+    <LayoutType>Horizontal</LayoutType>
+    <MetaInfo>
+      <NameIsFileName value="True" />
+      <Name>03_sales_etl</Name>
+      <Description>Phase 13 (spec 25) - re-derive Revenue/Profit and shape the fact_sales row for every contract-valid order line. Python fallback: src/etl.py::load_valid_rows.</Description>
+      <RootToolName />
+      <ToolVersion />
+      <ToolInDb value="False" />
+      <CategoryName />
+      <SearchTags />
+      <Author>InsightForge AI</Author>
+      <Company />
+      <Copyright />
+      <DescriptionLink actual="" displayed="" />
+      <Example>
+        <Description />
+        <File />
+      </Example>
+    </MetaInfo>
+  </Properties>
+</AlteryxDocument>

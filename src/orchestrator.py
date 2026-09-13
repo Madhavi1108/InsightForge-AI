@@ -5,15 +5,14 @@ Both entry points - the ``watchdog`` watcher and ``run_pipeline.py`` - call
 :func:`main` with the same parsed arguments.
 
 Working stages: **ingestion** (``src/ingestion.py``), **schema validation**
-(``src/validation.py``, Phase 11), and the **Alteryx ingestion / data-quality
-workflows** (``src/alteryx.py``, Phase 12). The star-schema load arrives in
-Phase 13; until then an ingested + validated + workflow-checked file's run is
-closed as ``PARTIAL`` with an explanatory note, later flipped to ``SUCCESS``.
+(``src/validation.py``, Phase 11), the **Alteryx ingestion / data-quality
+workflows** (``src/alteryx.py``, Phase 12), and the **star-schema load**
+(``src/etl.py``, Phase 13). A file that clears every stage closes ``SUCCESS``.
 
 Exit codes: ``0`` ok, ``2`` no mode chosen, ``3`` nothing to do / mode not built
 yet, ``4`` database unavailable, ``5`` a file failed ingestion, ``6`` a file
 failed schema validation (rejected), ``7`` the Alteryx/DQ workflow stage
-raised unexpectedly.
+raised unexpectedly, ``8`` the star-schema load failed after retries.
 """
 from __future__ import annotations
 
@@ -31,12 +30,11 @@ from src import ingestion
 from src.alteryx import run_data_quality_workflow, run_ingestion_workflow
 from src.config import get_alteryx_settings, get_paths
 from src.database import Database, DatabaseError
+from src.etl import EtlLoadError, run_sales_etl_workflow
 from src.ingestion import IngestionError, IngestionResult, ingest_file
 from src.validation import ValidationResult, validate_csv
 
 logger = logging.getLogger(__name__)
-
-_PARTIAL_NOTE = "star-schema load not implemented yet (Phase 13)"
 
 
 def _configure_logging() -> None:
@@ -48,7 +46,7 @@ def _configure_logging() -> None:
 
 
 def _write_processed_summary(processed_dir: Path, result: IngestionResult,
-                             vres: ValidationResult, alteryx_metrics: dict) -> None:
+                             vres: ValidationResult, stage_metrics: dict) -> None:
     processed_dir.mkdir(parents=True, exist_ok=True)
     summary = {
         "run_id": result.run_id,
@@ -57,10 +55,10 @@ def _write_processed_summary(processed_dir: Path, result: IngestionResult,
         "rows_received": result.metadata.row_count,
         "rows_valid": vres.rows_valid,
         "rows_rejected": vres.rows_rejected,
-        "alteryx_ingestion": alteryx_metrics.get("alteryx_ingestion"),
-        "alteryx_dq": alteryx_metrics.get("alteryx_dq"),
-        "status": "PARTIAL",
-        "note": _PARTIAL_NOTE,
+        "alteryx_ingestion": stage_metrics.get("alteryx_ingestion"),
+        "alteryx_dq": stage_metrics.get("alteryx_dq"),
+        "etl": stage_metrics.get("etl"),
+        "status": "SUCCESS",
     }
     out = processed_dir / f"{Path(result.file_name).stem}.json"
     out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -185,22 +183,43 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
 
     alteryx_metrics = {"alteryx_ingestion": asdict(ing_wf), "alteryx_dq": asdict(dq_wf)}
 
+    # Stage 5 - star-schema load (Phase 13)
+    try:
+        etl_result = run_sales_etl_workflow(result.raw_path, result.run_id, db, vres,
+                                            alteryx_settings)
+    except EtlLoadError as exc:
+        elapsed = round(time.monotonic() - started, 3)
+        db.execute(
+            "UPDATE pipeline_runs SET status='FAILED', finished_at=now(), "
+            "duration_s=:d, rows_received=:rr, rows_valid=:rv, rows_rejected=:rj, "
+            "error=:e, stage_metrics=CAST(:sm AS JSONB) WHERE run_id=:r",
+            {"d": elapsed, "rr": result.metadata.row_count, "rv": vres.rows_valid,
+             "rj": vres.rows_rejected, "e": f"star-schema load failed: {exc}"[:1000],
+             "sm": json.dumps({"ingest": ingest_metrics, "validate": validate_metrics,
+                               **alteryx_metrics}),
+             "r": result.run_id},
+        )
+        print(f"[error] {result.file_name}: star-schema load failed - {exc}")
+        return 8
+
+    stage_metrics = {**alteryx_metrics, "etl": asdict(etl_result)}
+
     elapsed = round(time.monotonic() - started, 3)
     db.execute(
-        "UPDATE pipeline_runs SET status='PARTIAL', finished_at=now(), "
+        "UPDATE pipeline_runs SET status='SUCCESS', finished_at=now(), "
         "duration_s=:d, rows_received=:rr, rows_valid=:rv, rows_rejected=:rj, "
-        "error=:note, stage_metrics=CAST(:sm AS JSONB) WHERE run_id=:r",
+        "error=NULL, stage_metrics=CAST(:sm AS JSONB) WHERE run_id=:r",
         {"d": elapsed, "rr": result.metadata.row_count, "rv": vres.rows_valid,
-         "rj": vres.rows_rejected, "note": _PARTIAL_NOTE,
+         "rj": vres.rows_rejected,
          "sm": json.dumps({"ingest": ingest_metrics, "validate": validate_metrics,
-                           **alteryx_metrics}),
+                           **stage_metrics}),
          "r": result.run_id},
     )
-    _write_processed_summary(paths.processed, result, vres, alteryx_metrics)
+    _write_processed_summary(paths.processed, result, vres, stage_metrics)
     print(f"[ok] {result.file_name}: run {result.run_id} - "
           f"{vres.rows_valid} valid / {vres.rows_rejected} rejected - "
-          f"alteryx {ing_wf.engine}/{dq_wf.engine} "
-          f"(PARTIAL - {_PARTIAL_NOTE})")
+          f"alteryx {ing_wf.engine}/{dq_wf.engine}, etl {etl_result.engine} "
+          f"({etl_result.summary.get('rows_loaded', 0)} rows loaded) - SUCCESS")
     return 0
 
 

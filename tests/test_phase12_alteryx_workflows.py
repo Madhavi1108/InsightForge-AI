@@ -287,18 +287,30 @@ def _paths(tmp_path):
     return p
 
 
+def _stub_etl_result():
+    from src.etl import EtlResult
+    return EtlResult(engine="python_fallback", verified=False, seconds=0.0,
+                     summary={"rows_loaded": 0, "customers_upserted": 0,
+                              "products_upserted": 0, "regions_upserted": 0,
+                              "dates_upserted": 0})
+
+
 def _run_file(monkeypatch, tmp_path, rows, name="sales_2026_02_24.csv"):
     from src import orchestrator
     p = _paths(tmp_path)
     monkeypatch.setattr(orchestrator, "get_paths", lambda: p)
     fake = FakeDB()
     monkeypatch.setattr(orchestrator, "Database", lambda *a, **k: fake)
+    # Phase 13's real loader needs a genuine DB connection (db.transaction());
+    # these tests exercise only the Phase 12 Alteryx stage against a stub DB.
+    monkeypatch.setattr(orchestrator, "run_sales_etl_workflow",
+                        lambda *a, **k: _stub_etl_result())
     _frame(*rows).to_csv(p.incoming / name, index=False)
     code = orchestrator.run_file(p.incoming / name)
     return code, fake, p
 
 
-def test_run_file_adds_alteryx_stage_metrics_and_stays_partial(monkeypatch, tmp_path):
+def test_run_file_adds_alteryx_stage_metrics_and_succeeds(monkeypatch, tmp_path):
     code, fake, p = _run_file(monkeypatch, tmp_path, [GOOD_ROW, GOOD_ROW])
     assert code == 0
     updates = [c[2]["sm"] for c in fake.calls if c[0] == "execute" and c[2] and "sm" in c[2]]
@@ -306,7 +318,7 @@ def test_run_file_adds_alteryx_stage_metrics_and_stays_partial(monkeypatch, tmp_
     last = updates[-1]
     assert "alteryx_ingestion" in last and "alteryx_dq" in last
     assert '"engine": "python_fallback"' in last
-    assert any("PARTIAL" in s for s in fake.sql_of("execute"))
+    assert any("SUCCESS" in s for s in fake.sql_of("execute"))
 
 
 def test_run_file_processed_summary_includes_alteryx_keys(monkeypatch, tmp_path):

@@ -340,23 +340,33 @@ def test_delivery_generator_output_is_structural_ok_but_has_row_defects(tmp_path
 # --------------------------------------------------------------------------- #
 def _run_file(monkeypatch, tmp_path, rows_or_df, name="sales_2026_02_24.csv"):
     from src import orchestrator
+    from src.etl import EtlResult
     p = _paths(tmp_path)
     monkeypatch.setattr(orchestrator, "get_paths", lambda: p)
     fake = FakeDB()
     monkeypatch.setattr(orchestrator, "Database", lambda *a, **k: fake)
+    # Phase 13's real loader needs a genuine DB connection (db.transaction());
+    # these tests exercise only stages 1-4 against a stub DB.
+    monkeypatch.setattr(
+        orchestrator, "run_sales_etl_workflow",
+        lambda *a, **k: EtlResult(engine="python_fallback", verified=False, seconds=0.0,
+                                  summary={"rows_loaded": 0, "customers_upserted": 0,
+                                           "products_upserted": 0, "regions_upserted": 0,
+                                           "dates_upserted": 0}),
+    )
     df = rows_or_df if isinstance(rows_or_df, pd.DataFrame) else _frame(*rows_or_df)
     df.to_csv(p.incoming / name, index=False)
     code = orchestrator.run_file(p.incoming / name)
     return code, fake, p
 
 
-def test_run_file_clean_closes_partial_with_validate_metrics(monkeypatch, tmp_path):
+def test_run_file_clean_closes_success_with_validate_metrics(monkeypatch, tmp_path):
     code, fake, p = _run_file(monkeypatch, tmp_path, [GOOD_ROW, GOOD_ROW])
     assert code == 0
     updates = [c[2]["sm"] for c in fake.calls
                if c[0] == "execute" and c[2] and "sm" in c[2]]
     assert updates and "validate" in updates[-1] and "ingest" in updates[-1]
-    assert any("PARTIAL" in s for s in fake.sql_of("execute"))
+    assert any("SUCCESS" in s for s in fake.sql_of("execute"))
     assert not any("rejected_records" in s for s in fake.sql_of("execute"))
     assert not any("rejected_records" in s for s in fake.sql_of("execute_many"))
     assert list(p.processed.glob("*.json"))
@@ -407,7 +417,7 @@ def _int_paths(tmp_path):
 
 
 @pg_integration
-def test_clean_file_closes_partial_with_no_rejects(tmp_path, monkeypatch):
+def test_clean_file_closes_success_with_no_rejects(tmp_path, monkeypatch):
     pytest.importorskip("psycopg2")
     _apply_schema()
     from scripts import generate_dataset as gd
@@ -427,13 +437,14 @@ def test_clean_file_closes_partial_with_no_rejects(tmp_path, monkeypatch):
             "SELECT run_id, status, rows_rejected, stage_metrics FROM pipeline_runs "
             "WHERE file_name = :n ORDER BY run_id DESC LIMIT 1", {"n": name},
         )
-        assert row["status"] == "PARTIAL"
+        assert row["status"] == "SUCCESS"
         assert row["rows_rejected"] == 0
         assert row["stage_metrics"]["validate"]["rows_rejected"] == 0
         assert db.scalar(
             "SELECT count(*) FROM rejected_records WHERE run_id = :r", {"r": row["run_id"]}
         ) == 0
     finally:
+        # fact_sales rows cascade-delete with their pipeline_runs row.
         db.execute("DELETE FROM pipeline_runs WHERE file_name LIKE :p", {"p": SENTINEL + "%"})
         db.execute("DELETE FROM file_registry WHERE file_name LIKE :p", {"p": SENTINEL + "%"})
 

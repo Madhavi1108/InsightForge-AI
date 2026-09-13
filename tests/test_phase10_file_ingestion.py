@@ -455,7 +455,7 @@ def test_ingest_registers_hash_and_dedupes(tmp_path):
 
 
 @pg_integration
-def test_run_file_closes_run_as_partial(tmp_path, monkeypatch):
+def test_run_file_closes_run_as_success(tmp_path, monkeypatch):
     pytest.importorskip("psycopg2")
     _apply_schema()
     from scripts import generate_dataset as gd
@@ -477,11 +477,13 @@ def test_run_file_closes_run_as_partial(tmp_path, monkeypatch):
             "SELECT status, error, stage_metrics FROM pipeline_runs "
             "WHERE file_name = :n ORDER BY run_id DESC LIMIT 1", {"n": name},
         )
-        assert row["status"] == "PARTIAL"
-        assert "not implemented yet" in row["error"]
+        assert row["status"] == "SUCCESS"
+        assert row["error"] is None
         assert "ingest" in json.dumps(row["stage_metrics"])
         assert "validate" in json.dumps(row["stage_metrics"])
+        assert "etl" in json.dumps(row["stage_metrics"])
         assert (p.processed / f"{SENTINEL}_c.json").is_file()
     finally:
+        # fact_sales rows cascade-delete with their pipeline_runs row.
         db.execute("DELETE FROM file_registry WHERE file_name LIKE :p", {"p": SENTINEL + "%"})
         db.execute("DELETE FROM pipeline_runs WHERE file_name LIKE :p", {"p": SENTINEL + "%"})

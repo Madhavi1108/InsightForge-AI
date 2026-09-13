@@ -61,8 +61,8 @@ class WorkflowResult:
     error: str | None = None
 
 
-def _invoke_alteryx_engine(workflow_path: Path, csv_path: Path,
-                           settings: AlteryxSettings) -> subprocess.CompletedProcess:
+def invoke_alteryx_engine(workflow_path: Path, csv_path: Path,
+                          settings: AlteryxSettings) -> subprocess.CompletedProcess:
     """Shell out to ``AlteryxEngineCmd.exe <workflow.yxmd>``, retried.
 
     The input CSV path is passed as a positional argument; the ``.yxmd``
@@ -100,7 +100,7 @@ def _run_with_engine_or_fallback(
     if settings.is_configured():
         workflow_path = settings.workflow_path(workflow_file)
         try:
-            _invoke_alteryx_engine(workflow_path, csv_path, settings)
+            invoke_alteryx_engine(workflow_path, csv_path, settings)
             return WorkflowResult(
                 workflow=workflow_name, engine="alteryx", verified=True,
                 seconds=round(time.monotonic() - started, 3),

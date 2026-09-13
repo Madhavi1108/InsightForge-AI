@@ -33,7 +33,7 @@ dropped). Current progress is tracked in
 |------|--------|-------|-------|
 | 0 | 0 | Project initialization | **Complete** |
 | 1 | 1-6 | Architecture, requirements, dataset, generation | **Complete** |
-| 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | Phases 7-12 complete |
+| 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | Phases 7-13 complete |
 | 3 | 15-17 | SQL / KPIs / views / change detection | Not started |
 | 4 | 18-23 | Anomaly / drift / RCA / impact | Not started |
 | 5 | 24-26 | RFM / product intel / forecast / recommendations | Not started |
@@ -118,10 +118,12 @@ python run_pipeline.py --watch        # Ctrl+C to stop
 ```
 
 Ingestion + SHA-256 fingerprinting ([`docs/ingestion.md`](docs/ingestion.md)),
-schema/contract validation ([`docs/validation.md`](docs/validation.md)), and
-the Alteryx ingestion/data-quality workflows
-([`docs/alteryx-workflows.md`](docs/alteryx-workflows.md)) run for real today;
-the star-schema load and analytics arrive in Phase 13+. Scheduled-mode
+schema/contract validation ([`docs/validation.md`](docs/validation.md)), the
+Alteryx ingestion/data-quality workflows
+([`docs/alteryx-workflows.md`](docs/alteryx-workflows.md)), and the
+sales/customer/product ETL that loads the star schema
+([`docs/star-schema-etl.md`](docs/star-schema-etl.md)) run for real today - a
+clean file closes `SUCCESS`; analytics arrive in Phase 14+. Scheduled-mode
 (`--scheduler`) wiring is added in Phase 35.
 
 ---
