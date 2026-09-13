@@ -199,10 +199,21 @@
 - **Inputs**: star schema.
 - **Outputs**: views consumed by intelligence, reporting, BI.
 
-### `src/change_detection.py` (new Phase 17)
-- **Responsibility**: period comparison (day/week/month vs previous) and
-  significant-movement detection with percentage deltas.
-- **Outputs**: change records (metric, current, previous, % change, direction).
+### `src/change_detection.py` (Phase 17 - **delivered**)
+- **Responsibility**: period comparison (day/week/month vs previous - the
+  two most recent complete periods) and significant-movement detection
+  across the 10 core KPIs, queried fresh from `fact_sales` per grain (not
+  the Phase 16 views, to keep distinct-count metrics correct at the week
+  grain).
+- **API**: `compare_period(db, grain)`, `compare_all_periods(db)`,
+  `build_change_records(...)` (pure core), `significant_change_threshold_pct()`.
+- **Outputs**: `list[ChangeRecord]` (`metric`, `current`, `previous`,
+  `pct_change`, `direction`, `magnitude`, `significant`) - **not persisted**
+  (no schema table) and **not** wired into `src/orchestrator.py`'s per-file
+  pipeline; a downstream/batch analytics module.
+- **Failure behaviour**: fewer than 2 periods of data for a grain -> `[]`,
+  not an error. A `0 -> non-zero` move is flagged `significant=True` with
+  `pct_change=None` (undefined ratio, never silently dropped).
 
 ## Intelligence
 
