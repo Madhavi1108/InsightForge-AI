@@ -217,14 +217,22 @@
 
 ## Intelligence
 
-### Anomaly detection (new Phase 18-20)
-- **Z-score**, **IQR** (Q1/Q3/IQR/bounds), **rolling baseline** (mean/median/std
-  vs expected range), **Isolation Forest** (`sklearn`, anomaly score +
-  prediction + confidence).
+### Anomaly detection (Phase 18-20)
+- **`src/anomaly_detection.py`** (Phase 18 - **delivered**): **Z-score**
+  (population mean/std over the daily series, `ZSCORE_THRESHOLD` default
+  3.0) and **IQR** (Q1/Q3/IQR/bounds via `numpy.percentile`, `IQR_MULTIPLIER`
+  default 1.5), both pure functions (`detect_zscore`/`detect_iqr`) plus a
+  thin `fact_sales`-querying wrapper (`detect_all_zscore`/`detect_all_iqr`).
+  Runs against the same daily KPI time series `src.change_detection` already
+  computes. Not persisted - the `anomalies` table's fusion/severity columns
+  (`detector_votes`, `confidence`, `severity`) don't apply per-detector.
+- **rolling baseline** (mean/median/std vs expected range) and
+  **Isolation Forest** (`sklearn`, anomaly score + prediction + confidence) -
+  new Phase 19, same module.
 - **Anomaly fusion**: combine the four detectors into one unified result per
-  metric/date; persist to `anomalies`.
+  metric/date; persist to `anomalies` - new Phase 20.
 - **Severity engine**: classify LOW / MEDIUM / HIGH / CRITICAL from percentage
-  deviation, business impact, confidence, persistence.
+  deviation, business impact, confidence, persistence - new Phase 20.
 
 ### `src/drift_detection.py` (new Phase 21)
 - **Responsibility**: monitor distributions (price, quantity, discount, shipping,

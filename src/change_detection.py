@@ -162,15 +162,25 @@ def build_change_records(
 # --------------------------------------------------------------------------- #
 # DB-querying wrapper
 # --------------------------------------------------------------------------- #
+def fetch_period_series(db: Database, grain: str) -> list[dict]:
+    """Every period's row for ``grain`` (all 10 metrics), ordered ascending.
+
+    ``grain`` is one of :data:`GRAINS`. Reused by ``src.anomaly_detection``
+    (Phase 18+) so the daily/weekly/monthly KPI time series is computed in
+    exactly one place.
+    """
+    if grain not in _GRAIN_SQL:
+        raise ValueError(f"unknown grain {grain!r}, expected one of {GRAINS}")
+    return db.fetch_all(_GRAIN_SQL[grain])
+
+
 def compare_period(db: Database, grain: str, threshold_pct: float | None = None) -> list[ChangeRecord]:
     """Compare the two most recent complete periods for ``grain``.
 
     ``grain`` is one of :data:`GRAINS`. Returns ``[]`` when fewer than two
     periods of data exist yet (a young dataset - not an error).
     """
-    if grain not in _GRAIN_SQL:
-        raise ValueError(f"unknown grain {grain!r}, expected one of {GRAINS}")
-    rows = db.fetch_all(_GRAIN_SQL[grain])
+    rows = fetch_period_series(db, grain)
     if len(rows) < 2:
         return []
     previous_row, current_row = rows[-2], rows[-1]
