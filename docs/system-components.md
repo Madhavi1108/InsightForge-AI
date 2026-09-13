@@ -238,15 +238,32 @@
     (`detect_isolation_forest`/`detect_all_isolation_forest`).
   - Not persisted - the `anomalies` table's fusion/severity columns
     (`detector_votes`, `confidence`, `severity`) don't apply per-detector.
-- **Anomaly fusion**: combine the four detectors into one unified result per
-  metric/date; persist to `anomalies` - new Phase 20.
-- **Severity engine**: classify LOW / MEDIUM / HIGH / CRITICAL from percentage
-  deviation, business impact, confidence, persistence - new Phase 20.
+- **`src/anomaly_fusion.py`** (Phase 20 - **delivered**): **Anomaly fusion**
+  combines the four detectors into one unified result per metric/date,
+  gated by `ANOMALY_FUSION_MIN_VOTES` (default 2 of 4 must agree); persists
+  to `anomalies` - the only anomaly-related module that writes to the
+  database (`anomalies.run_id` is `NOT NULL`, so unlike Phases 17-19's
+  unwired pure detectors, this one **is** wired into
+  `src/orchestrator.py` as stage 7, additively to `stage_metrics` and never
+  affecting `pipeline_runs.status`). **Severity engine**: classifies LOW /
+  MEDIUM / HIGH / CRITICAL from a weighted score over percentage deviation,
+  a per-metric `BUSINESS_IMPACT_WEIGHT`, confidence (`detector_votes/4`),
+  and persistence (consecutive-day streak).
 
-### `src/drift_detection.py` (new Phase 21)
+### `src/drift_detection.py` (Phase 21 - **delivered**)
 - **Responsibility**: monitor distributions (price, quantity, discount, shipping,
-  category mix, region mix); classify Normal / Warning / Drift Detected; store
-  history.
+  category mix, region mix) via PSI (Population Stability Index - trailing
+  `DRIFT_CURRENT_DAYS` window vs the `DRIFT_BASELINE_DAYS` window before it);
+  classify Normal / Warning / Drift Detected using PSI's own conventional
+  thresholds (`<0.1`/`0.1-0.25`/`>=0.25`); store history in the new
+  `drift_results` table.
+- **API**: `detect_all_drift`/`detect_and_persist_drift`,
+  `compute_psi_continuous`/`compute_psi_categorical` (pure), `classify_psi`.
+- **Outputs**: `drift_results` rows (one per feature per run that checked
+  it), `stage_metrics.drift`.
+- **Wiring**: like Phase 20's anomaly fusion, wired into
+  `src/orchestrator.py` (stage 8) because `drift_results.run_id` is
+  `NOT NULL` - purely additive, never affects `pipeline_runs.status`.
 
 ### `src/root_cause.py` (new Phase 22)
 - **Responsibility**: hierarchical drill-down Region -> Category -> Subcategory ->

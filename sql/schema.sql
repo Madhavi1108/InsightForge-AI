@@ -148,6 +148,25 @@ CREATE TABLE IF NOT EXISTS forecast_results (
     UNIQUE (run_id, metric, horizon_days, forecast_date)
 );
 
+-- Population Stability Index per monitored distribution (Phase 21). One row
+-- per feature per run that checked it - "store historical drift results".
+CREATE TABLE IF NOT EXISTS drift_results (
+    drift_id        BIGSERIAL PRIMARY KEY,
+    run_id          BIGINT      NOT NULL REFERENCES pipeline_runs(run_id) ON DELETE CASCADE,
+    feature         TEXT        NOT NULL,
+    psi_score       NUMERIC(10,6),
+    status          TEXT        NOT NULL
+                    CHECK (status IN ('Normal','Warning','Drift Detected')),
+    baseline_start  DATE,
+    baseline_end    DATE,
+    current_start   DATE,
+    current_end     DATE,
+    baseline_count  INTEGER,
+    current_count   INTEGER,
+    detail          JSONB,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ========================================================================
 -- Phase 15 - star schema dimensions
 -- ========================================================================
@@ -286,3 +305,5 @@ CREATE INDEX IF NOT EXISTS idx_recommendations_run_id    ON recommendations (run
 CREATE INDEX IF NOT EXISTS idx_recommendations_priority  ON recommendations (priority_score DESC);
 CREATE INDEX IF NOT EXISTS idx_forecast_results_run_id   ON forecast_results (run_id);
 CREATE INDEX IF NOT EXISTS idx_forecast_results_metric   ON forecast_results (metric, forecast_date);
+CREATE INDEX IF NOT EXISTS idx_drift_results_run_id      ON drift_results (run_id);
+CREATE INDEX IF NOT EXISTS idx_drift_results_feature     ON drift_results (feature, current_end);

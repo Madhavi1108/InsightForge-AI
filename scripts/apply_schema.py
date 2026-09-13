@@ -38,7 +38,8 @@ def _expected_objects() -> tuple[list[str], list[str]]:
     tables = [
         "pipeline_runs", "file_registry", "data_quality_results",
         "rejected_records", "anomalies", "recommendations", "forecast_results",
-        "dim_date", "dim_customer", "dim_product", "dim_region", "fact_sales",
+        "drift_results", "dim_date", "dim_customer", "dim_product", "dim_region",
+        "fact_sales",
     ]
     views = [
         "daily_kpis", "monthly_kpis", "regional_performance",

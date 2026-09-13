@@ -7,11 +7,16 @@ Both entry points - the ``watchdog`` watcher and ``run_pipeline.py`` - call
 Working stages: **ingestion** (``src/ingestion.py``), **schema validation**
 (``src/validation.py``, Phase 11), the **Alteryx ingestion / data-quality
 workflows** (``src/alteryx.py``, Phase 12), the **star-schema load**
-(``src/etl.py``, Phase 13), and the **data quality engine & gate**
-(``src/data_quality.py``, Phase 14). The gate gives the run its terminal
-status: ``>=95`` score -> ``SUCCESS``, ``90-94.99`` -> ``WARNING`` (the run
-still completed), ``<90`` -> ``FAILED`` - an audit-only REJECT that never
-deletes or rolls back rows Phase 13 already loaded into ``fact_sales``.
+(``src/etl.py``, Phase 13), the **data quality engine & gate**
+(``src/data_quality.py``, Phase 14), **anomaly fusion**
+(``src/anomaly_fusion.py``, Phase 20), and **drift detection**
+(``src/drift_detection.py``, Phase 21). The DQ gate gives the run its
+terminal status: ``>=95`` score -> ``SUCCESS``, ``90-94.99`` -> ``WARNING``
+(the run still completed), ``<90`` -> ``FAILED`` - an audit-only REJECT that
+never deletes or rolls back rows Phase 13 already loaded into
+``fact_sales``. Anomaly fusion and drift detection run after the gate and
+never change the terminal status - both are advisory analytics (a failure
+in either is logged into ``stage_metrics``, never fails the run).
 
 Exit codes: ``0`` ok (includes a DQ ``WARNING``), ``2`` no mode chosen,
 ``3`` nothing to do / mode not built yet, ``4`` database unavailable, ``5`` a
@@ -32,11 +37,15 @@ from pathlib import Path
 
 from dataclasses import asdict
 
+import pandas as pd
+
 from src import ingestion
 from src.alteryx import run_data_quality_workflow, run_ingestion_workflow
+from src.anomaly_fusion import detect_and_persist_anomalies
 from src.config import get_alteryx_settings, get_paths
 from src.data_quality import DIMENSIONS, DqReport, score_file, thresholds
 from src.database import Database, DatabaseError
+from src.drift_detection import detect_and_persist_drift
 from src.etl import EtlLoadError, run_sales_etl_workflow
 from src.ingestion import IngestionError, IngestionResult, ingest_file
 from src.validation import ValidationResult, validate_csv
@@ -67,6 +76,8 @@ def _write_processed_summary(processed_dir: Path, result: IngestionResult,
         "alteryx_dq": stage_metrics.get("alteryx_dq"),
         "etl": stage_metrics.get("etl"),
         "dq": stage_metrics.get("dq"),
+        "anomalies": stage_metrics.get("anomalies"),
+        "drift": stage_metrics.get("drift"),
         "status": status,
     }
     out = processed_dir / f"{Path(result.file_name).stem}.json"
@@ -237,6 +248,34 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
         "dimensions": {d.dimension: d.score for d in dq_report.dimensions},
     }
     status = {"PASS": "SUCCESS", "WARNING": "WARNING", "REJECT": "FAILED"}[dq_report.gate]
+
+    # Stage 7 - anomaly fusion (Phase 20) - advisory only, never affects status
+    try:
+        file_dates = set(pd.read_csv(result.raw_path, usecols=["Order_Date"])["Order_Date"])
+        fused = detect_and_persist_anomalies(db, result.run_id, dates=file_dates)
+        stage_metrics["anomalies"] = {
+            "count": len(fused),
+            "by_severity": {sev: sum(1 for a in fused if a.severity == sev)
+                           for sev in ("LOW", "MEDIUM", "HIGH", "CRITICAL")},
+        }
+    except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
+        stage_metrics["anomalies"] = {"error": f"anomaly fusion failed: {type(exc).__name__}"}
+        file_dates = None
+
+    # Stage 8 - drift detection & reporting (Phase 21) - advisory only, never affects status
+    try:
+        if not file_dates:
+            file_dates = set(pd.read_csv(result.raw_path, usecols=["Order_Date"])["Order_Date"])
+        current_end_date = max(file_dates)
+        drift_results = detect_and_persist_drift(db, result.run_id, current_end_date)
+        stage_metrics["drift"] = {
+            "count": len(drift_results),
+            "by_status": {s: sum(1 for d in drift_results if d.status == s)
+                         for s in ("Normal", "Warning", "Drift Detected")},
+        }
+    except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
+        stage_metrics["drift"] = {"error": f"drift detection failed: {type(exc).__name__}"}
+
     error = (f"data quality gate rejected the run: overall score "
              f"{dq_report.overall_score} < {thresholds()[1]}" if dq_report.gate == "REJECT"
              else None)
@@ -264,7 +303,9 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
           f"run {result.run_id} - {vres.rows_valid} valid / {vres.rows_rejected} rejected - "
           f"alteryx {ing_wf.engine}/{dq_wf.engine}, etl {etl_result.engine} "
           f"({etl_result.summary.get('rows_loaded', 0)} rows loaded) - "
-          f"DQ {dq_report.overall_score} ({dq_report.gate}) - {status}")
+          f"DQ {dq_report.overall_score} ({dq_report.gate}) - "
+          f"anomalies {stage_metrics['anomalies'].get('count', 'n/a')} - "
+          f"drift {stage_metrics['drift'].get('count', 'n/a')} - {status}")
     return 9 if dq_report.gate == "REJECT" else 0
 
 

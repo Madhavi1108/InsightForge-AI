@@ -109,9 +109,11 @@ re-running `scripts/apply_schema.py` picks it up on a pre-Phase-14 database.
 | `anomalies` | one metric / date / grain | fused detector output + severity | `anomaly_id` PK, `run_id` FK, `metric`, `anomaly_date`, `grain`, `observed/expected_value`, `deviation_pct`, `direction`, `{zscore,iqr,rolling,iforest}_flag`, `detector_votes`, `confidence`, `severity` CHECK ∈ {LOW, MEDIUM, HIGH, CRITICAL}, `persistence_days`, `detail` JSONB |
 | `recommendations` | one recommendation | rule-based, prioritised | `recommendation_id` PK, `run_id` FK, `title`, `rationale`, `rule_id`, `linked_anomaly_id` FK → `anomalies` (SET NULL), `severity`, `impact_value`, `confidence`, `priority_score` CHECK 0-100, `priority_band`, `status` |
 | `forecast_results` | one metric / horizon / date | exp-smoothing forecast + metrics | `forecast_id` PK, `run_id` FK, `metric`, `horizon_days` CHECK ∈ {7, 30}, `forecast_date`, `forecast_value`, `lower/upper_bound`, `model`, `mae`, `rmse`, `mape`, `UNIQUE (run_id, metric, horizon_days, forecast_date)` |
+| `drift_results` | one feature / run (Phase 21) | PSI + Normal/Warning/Drift Detected | `drift_id` PK, `run_id` FK, `feature`, `psi_score`, `status` CHECK ∈ {Normal, Warning, Drift Detected}, `baseline_start/end`, `current_start/end`, `baseline_count`, `current_count`, `detail` JSONB |
 
 `data_quality_results`, `rejected_records`, `anomalies`, `recommendations`,
-`forecast_results` all FK `run_id → pipeline_runs` with `ON DELETE CASCADE`.
+`forecast_results`, `drift_results` all FK `run_id → pipeline_runs` with
+`ON DELETE CASCADE`.
 
 ## 3. Lineage
 
