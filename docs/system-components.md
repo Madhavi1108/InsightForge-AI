@@ -280,9 +280,18 @@
   20/21's `anomalies`/`drift_results`). Called later by business impact,
   recommendations, or the AI Analyst.
 
-### `src/impact_analysis.py` (new Phase 23)
-- **Responsibility**: expected vs actual revenue & profit, revenue/profit gap,
-  revenue/profit at risk, customers affected, orders affected.
+### `src/impact_analysis.py` (Phase 23 - **delivered**)
+- **Responsibility**: expected vs actual revenue & profit, revenue/profit
+  gap, revenue/profit at risk, customers affected, orders affected.
+  "Expected" reuses Phase 19's rolling baseline mean (the trailing
+  `ROLLING_WINDOW_DAYS`-day "expected range"); `gap = actual - expected`;
+  `at_risk = max(0.0, expected - actual)` (only a shortfall counts as risk).
+- **API**: `compute_gap` (pure), `assess_business_impact(db, date=None,
+  window=None, multiplier=None)`, `assess_business_impact_series(db,
+  window=None, multiplier=None)`.
+- **Wiring**: pure, on-demand - no database writes, no new table, not called
+  from `src/orchestrator.py` (same reasoning as Phase 17/22). Called later
+  by recommendations, the AI Analyst, or a Streamlit page.
 
 ### Customer & product intelligence (new Phase 24)
 - **RFM**: Recency / Frequency / Monetary -> Champions, Loyal, Potential
