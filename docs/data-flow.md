@@ -51,14 +51,16 @@ from insight back to source file.
 
 Stages 1-2 are implemented in `src/ingestion.py` (Phase 10; see
 [`ingestion.md`](ingestion.md)); stage 3 in `src/validation.py` (Phase 11; see
-[`validation.md`](validation.md)).
+[`validation.md`](validation.md)); stage 4 in `src/alteryx.py` (Phase 12; see
+[`alteryx-workflows.md`](alteryx-workflows.md)).
 
 | # | Stage | Reads | Writes | Notes |
 |--:|-------|-------|--------|-------|
 | 1 | **Detect** | `data/incoming/` | - | watchdog event or `--scan` |
 | 2 | **Fingerprint & register** | file bytes, `file_registry` | `file_registry`, `pipeline_runs` (RUNNING), moves file to `raw/` + `archive/` | SHA-256; duplicate hash -> `SKIPPED_DUPLICATE`, re-drop moved to `archive/`, stop |
 | 3 | **Schema validation** | `raw/` file, `config/data_contract.yaml` | `rejected_records` (structural + per-row), `pipeline_runs` (`rows_valid` / `rows_rejected`, `stage_metrics.validate`) | missing/extra/reordered columns -> reject file, `FAILED`, exit 6; bad rows -> one `rejected_records` row each, valid rows proceed. DQ *scoring* is stage 5 (Phase 14). |
-| 4 | **Alteryx / Python ETL** | validated rows | `fact_sales`, `dim_date`, `dim_customer`, `dim_product`, `dim_region` | derives `Revenue`, `Profit`; prepares dimensions |
+| 4 | **Alteryx ingestion & DQ workflows** | `raw/` file | `pipeline_runs.stage_metrics.alteryx_ingestion` / `.alteryx_dq`, `data/processed/<name>.json` | Phase 12 - `.yxmd` workflow when Alteryx is configured (retried <=3), else Python fallback (`verified=False`, never faked); unexpected failure -> `FAILED`, exit 7 |
+| 4b | **Alteryx / Python ETL load** | validated rows | `fact_sales`, `dim_date`, `dim_customer`, `dim_product`, `dim_region` | Phase 13 (not started) - derives `Revenue`, `Profit`; prepares dimensions; flips the run to `SUCCESS` |
 | 5 | **Data quality engine** | loaded rows / staging | `data_quality_results`, `rejected_records` (row-level), `pipeline_runs.dq_score` | completeness, validity, uniqueness, consistency, accuracy, timeliness, referential integrity |
 | 6 | **Quality gate** | `dq_score` | `pipeline_runs.status` | `>=95` PASS, `90-94.99` WARNING (loads), `<90` REJECT (`FAILED`, alert) |
 | 7 | **SQL KPI engine** | star schema | KPI result sets (in-memory) + analytical views | Revenue, Profit, Margin, Orders, Customers, Units, AOV, Return Rate, Avg Discount, Shipping Time |

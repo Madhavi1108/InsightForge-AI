@@ -4,14 +4,16 @@ The single component that sequences the pipeline (``docs/architecture.md`` §4).
 Both entry points - the ``watchdog`` watcher and ``run_pipeline.py`` - call
 :func:`main` with the same parsed arguments.
 
-Working stages: **ingestion** (``src/ingestion.py``) and **schema validation**
-(``src/validation.py``, Phase 11). ETL / analytics arrive in Phase 12+. Until
-then an ingested + validated file's run is closed as ``PARTIAL`` with an
-explanatory note; later phases will flip it to ``SUCCESS``.
+Working stages: **ingestion** (``src/ingestion.py``), **schema validation**
+(``src/validation.py``, Phase 11), and the **Alteryx ingestion / data-quality
+workflows** (``src/alteryx.py``, Phase 12). The star-schema load arrives in
+Phase 13; until then an ingested + validated + workflow-checked file's run is
+closed as ``PARTIAL`` with an explanatory note, later flipped to ``SUCCESS``.
 
 Exit codes: ``0`` ok, ``2`` no mode chosen, ``3`` nothing to do / mode not built
 yet, ``4`` database unavailable, ``5`` a file failed ingestion, ``6`` a file
-failed schema validation (rejected).
+failed schema validation (rejected), ``7`` the Alteryx/DQ workflow stage
+raised unexpectedly.
 """
 from __future__ import annotations
 
@@ -23,15 +25,18 @@ import sys
 import time
 from pathlib import Path
 
+from dataclasses import asdict
+
 from src import ingestion
-from src.config import get_paths
+from src.alteryx import run_data_quality_workflow, run_ingestion_workflow
+from src.config import get_alteryx_settings, get_paths
 from src.database import Database, DatabaseError
 from src.ingestion import IngestionError, IngestionResult, ingest_file
 from src.validation import ValidationResult, validate_csv
 
 logger = logging.getLogger(__name__)
 
-_PARTIAL_NOTE = "stages after validation not implemented yet (Phase 12+)"
+_PARTIAL_NOTE = "star-schema load not implemented yet (Phase 13)"
 
 
 def _configure_logging() -> None:
@@ -43,7 +48,7 @@ def _configure_logging() -> None:
 
 
 def _write_processed_summary(processed_dir: Path, result: IngestionResult,
-                             vres: ValidationResult) -> None:
+                             vres: ValidationResult, alteryx_metrics: dict) -> None:
     processed_dir.mkdir(parents=True, exist_ok=True)
     summary = {
         "run_id": result.run_id,
@@ -52,6 +57,8 @@ def _write_processed_summary(processed_dir: Path, result: IngestionResult,
         "rows_received": result.metadata.row_count,
         "rows_valid": vres.rows_valid,
         "rows_rejected": vres.rows_rejected,
+        "alteryx_ingestion": alteryx_metrics.get("alteryx_ingestion"),
+        "alteryx_dq": alteryx_metrics.get("alteryx_dq"),
         "status": "PARTIAL",
         "note": _PARTIAL_NOTE,
     }
@@ -157,6 +164,27 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
     if vres.row_violations:
         _reject_rows(db, result.run_id, vres)
 
+    # Stage 4 - Alteryx ingestion & data-quality workflows (Phase 12)
+    try:
+        alteryx_settings = get_alteryx_settings()
+        ing_wf = run_ingestion_workflow(result.raw_path, alteryx_settings)
+        dq_wf = run_data_quality_workflow(result.raw_path, settings=alteryx_settings)
+    except Exception as exc:  # noqa: BLE001 - never let a workflow crash the run silently
+        elapsed = round(time.monotonic() - started, 3)
+        db.execute(
+            "UPDATE pipeline_runs SET status='FAILED', finished_at=now(), "
+            "duration_s=:d, rows_received=:rr, rows_valid=:rv, rows_rejected=:rj, "
+            "error=:e, stage_metrics=CAST(:sm AS JSONB) WHERE run_id=:r",
+            {"d": elapsed, "rr": result.metadata.row_count, "rv": vres.rows_valid,
+             "rj": vres.rows_rejected, "e": f"alteryx/dq workflow failed: {type(exc).__name__}",
+             "sm": json.dumps({"ingest": ingest_metrics, "validate": validate_metrics}),
+             "r": result.run_id},
+        )
+        print(f"[error] {result.file_name}: alteryx/dq workflow stage failed - {type(exc).__name__}")
+        return 7
+
+    alteryx_metrics = {"alteryx_ingestion": asdict(ing_wf), "alteryx_dq": asdict(dq_wf)}
+
     elapsed = round(time.monotonic() - started, 3)
     db.execute(
         "UPDATE pipeline_runs SET status='PARTIAL', finished_at=now(), "
@@ -164,12 +192,14 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
         "error=:note, stage_metrics=CAST(:sm AS JSONB) WHERE run_id=:r",
         {"d": elapsed, "rr": result.metadata.row_count, "rv": vres.rows_valid,
          "rj": vres.rows_rejected, "note": _PARTIAL_NOTE,
-         "sm": json.dumps({"ingest": ingest_metrics, "validate": validate_metrics}),
+         "sm": json.dumps({"ingest": ingest_metrics, "validate": validate_metrics,
+                           **alteryx_metrics}),
          "r": result.run_id},
     )
-    _write_processed_summary(paths.processed, result, vres)
+    _write_processed_summary(paths.processed, result, vres, alteryx_metrics)
     print(f"[ok] {result.file_name}: run {result.run_id} - "
-          f"{vres.rows_valid} valid / {vres.rows_rejected} rejected "
+          f"{vres.rows_valid} valid / {vres.rows_rejected} rejected - "
+          f"alteryx {ing_wf.engine}/{dq_wf.engine} "
           f"(PARTIAL - {_PARTIAL_NOTE})")
     return 0
 

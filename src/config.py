@@ -223,3 +223,41 @@ def get_paths() -> PipelinePaths:
     """Load ``.env`` then resolve :class:`PipelinePaths` (cached)."""
     load_env()
     return PipelinePaths.from_env()
+
+
+# --------------------------------------------------------------------------- #
+# Alteryx integration (Phase 12-13)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class AlteryxSettings:
+    """Engine-selection settings for the Alteryx workflows + Python fallback.
+
+    Per ``docs/system-components.md``: a blank/unset ``ALTERYX_ENGINE_CMD``
+    (or one that doesn't point at a real executable) means Alteryx isn't
+    available here, and every workflow runs via its Python fallback instead -
+    logged as unverified, never faked.
+    """
+
+    engine_cmd: str | None
+    workflow_dir: Path
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "AlteryxSettings":
+        env = os.environ if environ is None else environ
+        cmd = env.get("ALTERYX_ENGINE_CMD", "").strip() or None
+        workflow_dir = env.get("ALTERYX_WORKFLOW_DIR", "alteryx").strip() or "alteryx"
+        return cls(engine_cmd=cmd, workflow_dir=_resolve_path(workflow_dir))
+
+    def is_configured(self) -> bool:
+        """True only when ``engine_cmd`` is set and actually exists on disk."""
+        return bool(self.engine_cmd) and Path(self.engine_cmd).is_file()
+
+    def workflow_path(self, name: str) -> Path:
+        return self.workflow_dir / name
+
+
+@lru_cache(maxsize=1)
+def get_alteryx_settings() -> AlteryxSettings:
+    """Load ``.env`` then resolve :class:`AlteryxSettings` (cached)."""
+    load_env()
+    return AlteryxSettings.from_env()

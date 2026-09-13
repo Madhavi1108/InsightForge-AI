@@ -1,0 +1,164 @@
+<?xml version="1.0"?>
+<AlteryxDocument yxmdVer="2023.1">
+  <Nodes>
+    <Node ToolID="1">
+      <GuiSettings Plugin="AlteryxBasePluginsGui.DbFileInput.DbFileInput">
+        <Position x="54" y="54" />
+      </GuiSettings>
+      <Properties>
+        <Configuration>
+          <!-- Input CSV path is supplied at run time via the engine command
+               line (see src/alteryx.py::_invoke_alteryx_engine); this literal
+               value is a development-time placeholder only. -->
+          <File RecordLimit="" SearchSubDirs="False">data\raw\*.csv</File>
+          <FormatSpecificOptions>
+            <CodePage>28591</CodePage>
+            <Delimeter>,</Delimeter>
+            <IgnoreErrors>False</IgnoreErrors>
+            <FieldLen>254</FieldLen>
+            <AllowShareWrite>False</AllowShareWrite>
+            <HeaderRow>True</HeaderRow>
+            <IgnoreQuotes>DoubleQuotes</IgnoreQuotes>
+          </FormatSpecificOptions>
+        </Configuration>
+        <Annotation DisplayMode="0">
+          <Name>Raw daily CSV (data/raw/)</Name>
+          <DefaultAnnotationText>Same structurally-valid input as 01_ingestion.yxmd</DefaultAnnotationText>
+        </Annotation>
+      </Properties>
+      <EngineSettings Macro="" Module="AlteryxBasePluginsEngine.dll" DllEntryPoint="AlteryxDbFileInput" />
+    </Node>
+    <Node ToolID="2">
+      <GuiSettings Plugin="AlteryxBasePluginsGui.Formula.Formula">
+        <Position x="174" y="54" />
+      </GuiSettings>
+      <Properties>
+        <Configuration>
+          <FormulaFields>
+            <FormulaField expression="IIF(IsEmpty([Order_Date]) OR IsEmpty([Customer_ID]) OR IsEmpty([Product_ID]) OR IsEmpty([Region]) OR IsEmpty([State]) OR IsEmpty([City]) OR IsEmpty([Quantity]) OR IsEmpty([Unit_Price]) OR IsEmpty([Discount]) OR IsEmpty([Revenue]) OR IsEmpty([Cost]) OR IsEmpty([Profit]) OR IsEmpty([Payment_Method]) OR IsEmpty([Order_Status]) OR IsEmpty([Return_Status]), 1, 0)" field="dq_missing_value" size="1" type="Byte" />
+            <FormulaField expression="IIF(REGEX_Match([Order_ID], '^ORD-\d{8}$') AND REGEX_Match([Customer_ID], '^CUST-\d{6}$') AND REGEX_Match([Product_ID], '^PROD-\d{5}$'), 0, 1)" field="dq_bad_pattern" size="1" type="Byte" />
+            <FormulaField expression="IIF(ToNumber([Quantity]) &gt;= 1 AND ToNumber([Unit_Price]) &gt; 0 AND ToNumber([Discount]) &gt;= 0 AND ToNumber([Discount]) &lt; 1, 0, 1)" field="dq_out_of_range" size="1" type="Byte" />
+            <FormulaField expression="IIF([Customer_Segment] IN ('Consumer','Corporate','Home Office') AND [Category] IN ('Electronics','Furniture','Office Supplies','Clothing','Home &amp; Kitchen') AND [Region] IN ('North','South','East','West','Central'), 0, 1)" field="dq_not_in_allowed_values" size="1" type="Byte" />
+            <FormulaField expression="[dq_missing_value] + [dq_bad_pattern] + [dq_out_of_range] + [dq_not_in_allowed_values]" field="dq_violation_count" size="4" type="Int32" />
+          </FormulaFields>
+        </Configuration>
+        <Annotation DisplayMode="0">
+          <Name>Per-field contract checks</Name>
+          <DefaultAnnotationText>Mirrors the categories in src/validation.py::VIOLATION_CATEGORIES (missing_value, bad_pattern, out_of_range, not_in_allowed_values); hierarchy + full type/length rules stay with the Python fallback for parity with Phase 11</DefaultAnnotationText>
+        </Annotation>
+      </Properties>
+      <EngineSettings Macro="" Module="AlteryxBasePluginsEngine.dll" DllEntryPoint="AlteryxFormula" />
+    </Node>
+    <Node ToolID="3">
+      <GuiSettings Plugin="AlteryxBasePluginsGui.Filter.Filter">
+        <Position x="294" y="54" />
+      </GuiSettings>
+      <Properties>
+        <Configuration>
+          <Expression>[dq_violation_count] = 0</Expression>
+        </Configuration>
+        <Annotation DisplayMode="0">
+          <Name>Split valid / violating rows</Name>
+          <DefaultAnnotationText>True = clean row, False = at least one contract violation</DefaultAnnotationText>
+        </Annotation>
+      </Properties>
+      <EngineSettings Macro="" Module="AlteryxBasePluginsEngine.dll" DllEntryPoint="AlteryxFilter" />
+    </Node>
+    <Node ToolID="4">
+      <GuiSettings Plugin="AlteryxBasePluginsGui.DbFileOutput.DbFileOutput">
+        <Position x="414" y="20" />
+      </GuiSettings>
+      <Properties>
+        <Configuration>
+          <File>data\processed\02_data_quality_valid.csv</File>
+          <FormatSpecificOptions>
+            <LineEndStyle>CRLF</LineEndStyle>
+            <Delimeter>,</Delimeter>
+            <ForceQuotes>False</ForceQuotes>
+            <HeaderRow>True</HeaderRow>
+            <CodePage>28591</CodePage>
+          </FormatSpecificOptions>
+        </Configuration>
+        <Annotation DisplayMode="0">
+          <Name>Rows with zero DQ violations</Name>
+        </Annotation>
+      </Properties>
+      <EngineSettings Macro="" Module="AlteryxBasePluginsEngine.dll" DllEntryPoint="AlteryxDbFileOutput" />
+    </Node>
+    <Node ToolID="5">
+      <GuiSettings Plugin="AlteryxBasePluginsGui.DbFileOutput.DbFileOutput">
+        <Position x="414" y="90" />
+      </GuiSettings>
+      <Properties>
+        <Configuration>
+          <File>data\processed\02_data_quality_violations.csv</File>
+          <FormatSpecificOptions>
+            <LineEndStyle>CRLF</LineEndStyle>
+            <Delimeter>,</Delimeter>
+            <ForceQuotes>False</ForceQuotes>
+            <HeaderRow>True</HeaderRow>
+            <CodePage>28591</CodePage>
+          </FormatSpecificOptions>
+        </Configuration>
+        <Annotation DisplayMode="0">
+          <Name>Rows with 1+ DQ violation</Name>
+          <DefaultAnnotationText>The equivalent Python-fallback report groups these by category/dimension (src/alteryx.py::run_data_quality_workflow) - not written to rejected_records here, that stays the orchestrator/Phase 11 job</DefaultAnnotationText>
+        </Annotation>
+      </Properties>
+      <EngineSettings Macro="" Module="AlteryxBasePluginsEngine.dll" DllEntryPoint="AlteryxDbFileOutput" />
+    </Node>
+  </Nodes>
+  <Connections>
+    <Connection>
+      <Origin ToolID="1" Connection="Output" />
+      <Destination ToolID="2" Connection="Input" />
+    </Connection>
+    <Connection>
+      <Origin ToolID="2" Connection="Output" />
+      <Destination ToolID="3" Connection="Input" />
+    </Connection>
+    <Connection>
+      <Origin ToolID="3" Connection="True" />
+      <Destination ToolID="4" Connection="Input" />
+    </Connection>
+    <Connection>
+      <Origin ToolID="3" Connection="False" />
+      <Destination ToolID="5" Connection="Input" />
+    </Connection>
+  </Connections>
+  <Properties>
+    <Memory default="True" />
+    <GlobalRecordLimit value="0" />
+    <TempFiles default="True" />
+    <Annotation on="True" includeToolName="False" />
+    <ConvErrorLimit value="10" />
+    <ConvErrorLimit_Stop value="False" />
+    <CancelOnError value="False" />
+    <DisableBrowse value="False" />
+    <EnablePerformanceProfiling value="False" />
+    <DisableAllOutput value="False" />
+    <ShowAllMacroMessages value="False" />
+    <ShowConnectionStatusIsOn value="True" />
+    <ShowConnectionStatusOnlyWhenRunning value="True" />
+    <ZoomLevel value="0" />
+    <LayoutType>Horizontal</LayoutType>
+    <MetaInfo>
+      <NameIsFileName value="True" />
+      <Name>02_data_quality</Name>
+      <Description>Phase 12 (spec 24) - per-row data-contract checks (missing value / bad pattern / out of range / not in allowed values), splitting valid rows from violations. Python fallback: src/alteryx.py::run_data_quality_workflow (calls src/validation.py::validate_csv for parity with Phase 11).</Description>
+      <RootToolName />
+      <ToolVersion />
+      <ToolInDb value="False" />
+      <CategoryName />
+      <SearchTags />
+      <Author>InsightForge AI</Author>
+      <Company />
+      <Copyright />
+      <DescriptionLink actual="" displayed="" />
+      <Example>
+        <Description />
+        <File />
+      </Example>
+    </MetaInfo>
+  </Properties>
+</AlteryxDocument>
