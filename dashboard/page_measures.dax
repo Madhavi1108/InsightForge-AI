@@ -1,0 +1,81 @@
+// ============================================================================
+// InsightForge AI - Power BI page-level DAX measures (Phase 32 / spec
+// Phases 61-63, part of FR-23).
+// ----------------------------------------------------------------------------
+// Real DAX - paste each measure into the named table, same as
+// dashboard/measures.dax (Phase 31), which this file extends without
+// modifying (a new file per phase, the same pattern Phase 24 used for
+// src/rfm.py + src/product_intelligence.py rather than editing an earlier
+// phase's module).
+//
+// Full design rationale, and which page each measure belongs to:
+// docs/powerbi-pages.md
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Table: fact_sales - Executive Overview / Business Drivers
+// Period-over-prior-period % change, via DAX time intelligence. Pattern
+// documented once here; the same DATEADD shape applies to all three
+// measures below (dim_date must be marked as the Date Table - Phase 31).
+// ---------------------------------------------------------------------------
+
+// Revenue Prev Day -- same-metric value one calendar day earlier
+Revenue Prev Day = CALCULATE([Revenue], DATEADD(dim_date[date_key], -1, DAY))
+
+// Revenue % Change (Day) -- (today - yesterday) / yesterday
+Revenue % Change (Day) = DIVIDE([Revenue] - [Revenue Prev Day], [Revenue Prev Day])
+
+// Profit Prev Day
+Profit Prev Day = CALCULATE([Profit], DATEADD(dim_date[date_key], -1, DAY))
+
+// Profit % Change (Day)
+Profit % Change (Day) = DIVIDE([Profit] - [Profit Prev Day], [Profit Prev Day])
+
+// Orders Prev Day
+Orders Prev Day = CALCULATE([Orders], DATEADD(dim_date[date_key], -1, DAY))
+
+// Orders % Change (Day)
+Orders % Change (Day) = DIVIDE([Orders] - [Orders Prev Day], [Orders Prev Day])
+
+// Revenue Prev Month -- same-metric value one calendar month earlier
+Revenue Prev Month = CALCULATE([Revenue], DATEADD(dim_date[date_key], -1, MONTH))
+
+// Revenue % Change (Month)
+Revenue % Change (Month) = DIVIDE([Revenue] - [Revenue Prev Month], [Revenue Prev Month])
+
+// ---------------------------------------------------------------------------
+// Table: fact_sales - Customer Intelligence
+// ---------------------------------------------------------------------------
+
+// Dataset Max Date -- the dataset's own latest order date (never wall-clock
+// "today" - same convention src/rfm.py documents for its own recency calc)
+Dataset Max Date = CALCULATE(MAX(fact_sales[order_date]), ALL(fact_sales))
+
+// Customer Recency Days -- days since this customer's (or this filter
+// context's) most recent order, relative to the dataset's own latest date
+Customer Recency Days = DATEDIFF(MAX(fact_sales[order_date]), [Dataset Max Date], DAY)
+
+// ---------------------------------------------------------------------------
+// Table: forecast_results - Forecast page
+// ---------------------------------------------------------------------------
+
+// Forecast Value -- the forecasted figure for the metric/horizon/date in context
+Forecast Value = SUM(forecast_results[forecast_value])
+
+// Forecast Lower Bound -- 95% confidence band, lower edge
+Forecast Lower Bound = SUM(forecast_results[lower_bound])
+
+// Forecast Upper Bound -- 95% confidence band, upper edge
+Forecast Upper Bound = SUM(forecast_results[upper_bound])
+
+// ---------------------------------------------------------------------------
+// Table: drift_results - Pipeline Health page
+// ---------------------------------------------------------------------------
+
+// Drift Features Flagged -- distributions currently Warning or Drift Detected
+// (src/drift_detection.py's own 3-tier PSI classification)
+Drift Features Flagged =
+CALCULATE(
+    COUNTROWS(drift_results),
+    drift_results[status] <> "Normal"
+)
