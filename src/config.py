@@ -359,3 +359,36 @@ def get_alert_settings() -> AlertSettings:
     """Load ``.env`` then resolve :class:`AlertSettings` (cached)."""
     load_env()
     return AlertSettings.from_env()
+
+
+# --------------------------------------------------------------------------- #
+# Scheduler (Phase 35)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class SchedulerSettings:
+    """Cron-loop settings for ``src/scheduler.py`` (``run_pipeline.py
+    --scheduler``, Phase 35).
+
+    Same "configured means real, else a documented no-op" shape as
+    :class:`AlteryxSettings`/:class:`AlertSettings`: ``SCHEDULER_ENABLED``
+    defaults to ``false``, so ``--scheduler`` stays a harmless no-op
+    (exit code 3, a clear message) until an operator opts in - never a
+    silent background loop nobody asked for.
+    """
+
+    enabled: bool
+    cron: str
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "SchedulerSettings":
+        env = os.environ if environ is None else environ
+        enabled = env.get("SCHEDULER_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+        cron = env.get("SCHEDULER_CRON", "").strip() or "0 * * * *"
+        return cls(enabled=enabled, cron=cron)
+
+
+@lru_cache(maxsize=1)
+def get_scheduler_settings() -> SchedulerSettings:
+    """Load ``.env`` then resolve :class:`SchedulerSettings` (cached)."""
+    load_env()
+    return SchedulerSettings.from_env()

@@ -346,10 +346,16 @@ def test_orchestrator_scan_empty_returns_3(monkeypatch, tmp_path, capsys):
     assert "no files" in capsys.readouterr().out
 
 
-def test_orchestrator_scheduler_returns_3_and_mentions_phase_35(capsys):
+def test_orchestrator_scheduler_disabled_by_default_returns_3(capsys, monkeypatch):
+    """Scheduled mode is real (Phase 35, src/scheduler.py) but stays a
+    no-op until an operator opts in via SCHEDULER_ENABLED=true."""
+    from src.config import get_scheduler_settings
+    monkeypatch.setenv("SCHEDULER_ENABLED", "false")
+    get_scheduler_settings.cache_clear()
     from src import orchestrator
     assert orchestrator.main(_ns(scheduler=True)) == 3
-    assert "Phase 35" in capsys.readouterr().out
+    assert "disabled" in capsys.readouterr().out
+    get_scheduler_settings.cache_clear()
 
 
 def test_orchestrator_no_mode_returns_2(capsys):

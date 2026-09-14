@@ -1,6 +1,7 @@
 """Phase 0 - verify the project scaffold and environment are in place."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -61,11 +62,13 @@ def test_run_pipeline_help_executes():
     assert "InsightForge AI" in result.stdout
 
 
-def test_run_pipeline_scheduler_mode_not_ready():
-    """Ingestion (Phase 10) runs for real; scheduled mode is still Phase 35."""
+def test_run_pipeline_scheduler_mode_disabled_by_default():
+    """Scheduled mode is real (Phase 35, src/scheduler.py) but stays a
+    no-op until an operator opts in via SCHEDULER_ENABLED=true."""
     result = subprocess.run(
         [sys.executable, "run_pipeline.py", "--scheduler"],
         cwd=PROJECT_ROOT, capture_output=True, text=True, check=False,
+        env={**os.environ, "SCHEDULER_ENABLED": "false"},
     )
     assert result.returncode == 3
-    assert "Phase 35" in result.stdout
+    assert "disabled" in result.stdout
