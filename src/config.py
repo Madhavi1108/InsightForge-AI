@@ -306,3 +306,56 @@ def get_llm_settings() -> LlmSettings:
     """Load ``.env`` then resolve :class:`LlmSettings` (cached)."""
     load_env()
     return LlmSettings.from_env()
+
+
+# --------------------------------------------------------------------------- #
+# SMTP / alert engine (Phase 34)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class AlertSettings:
+    """SMTP settings for the severity-routed alert engine (``src/alerts.py``,
+    Phase 34, FR-25).
+
+    Same "configured means a real send is attempted, else logged only" shape
+    as :class:`AlteryxSettings`/:class:`LlmSettings`: a blank/unset
+    ``SMTP_HOST`` means no real email is ever sent - the alert is logged
+    instead, never faked as delivered.
+    """
+
+    smtp_host: str | None
+    smtp_port: int
+    smtp_user: str | None
+    smtp_password: str | None
+    use_tls: bool
+    email_from: str
+    email_to: str
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "AlertSettings":
+        env = os.environ if environ is None else environ
+        host = env.get("SMTP_HOST", "").strip() or None
+        try:
+            port = int(env.get("SMTP_PORT", "587").strip() or 587)
+        except ValueError:
+            port = 587
+        user = env.get("SMTP_USER", "").strip() or None
+        password = env.get("SMTP_PASSWORD", "").strip() or None
+        use_tls = env.get("SMTP_USE_TLS", "true").strip().lower() not in ("false", "0", "no")
+        email_from = env.get("ALERT_EMAIL_FROM", "").strip() or "insightforge@example.com"
+        email_to = env.get("ALERT_EMAIL_TO", "").strip() or "manager@example.com"
+        return cls(
+            smtp_host=host, smtp_port=port, smtp_user=user, smtp_password=password,
+            use_tls=use_tls, email_from=email_from, email_to=email_to,
+        )
+
+    def is_configured(self) -> bool:
+        """True only when ``SMTP_HOST`` is set - same "configured means
+        real, else fallback" shape as :meth:`AlteryxSettings.is_configured`."""
+        return bool(self.smtp_host)
+
+
+@lru_cache(maxsize=1)
+def get_alert_settings() -> AlertSettings:
+    """Load ``.env`` then resolve :class:`AlertSettings` (cached)."""
+    load_env()
+    return AlertSettings.from_env()

@@ -10,15 +10,16 @@ workflows** (``src/alteryx.py``, Phase 12), the **star-schema load**
 (``src/etl.py``, Phase 13), the **data quality engine & gate**
 (``src/data_quality.py``, Phase 14), **anomaly fusion**
 (``src/anomaly_fusion.py``, Phase 20), **drift detection**
-(``src/drift_detection.py``, Phase 21), and **automated reporting**
-(``src/reporting.py``, Phase 33). The DQ gate gives the run its
+(``src/drift_detection.py``, Phase 21), **automated reporting**
+(``src/reporting.py``, Phase 33), and the **alert & email engine**
+(``src/alerts.py``, Phase 34). The DQ gate gives the run its
 terminal status: ``>=95`` score -> ``SUCCESS``, ``90-94.99`` -> ``WARNING``
 (the run still completed), ``<90`` -> ``FAILED`` - an audit-only REJECT that
 never deletes or rolls back rows Phase 13 already loaded into
-``fact_sales``. Anomaly fusion, drift detection, and reporting all run after
-the gate and never change the terminal status - each is advisory analytics
-(a failure in any of them is logged into ``stage_metrics``, never fails the
-run).
+``fact_sales``. Anomaly fusion, drift detection, reporting, and alerting all
+run after the gate and never change the terminal status - each is advisory
+analytics (a failure in any of them is logged into ``stage_metrics``, never
+fails the run).
 
 Exit codes: ``0`` ok (includes a DQ ``WARNING``), ``2`` no mode chosen,
 ``3`` nothing to do / mode not built yet, ``4`` database unavailable, ``5`` a
@@ -42,6 +43,7 @@ from dataclasses import asdict
 import pandas as pd
 
 from src import ingestion
+from src.alerts import dispatch_alerts
 from src.alteryx import run_data_quality_workflow, run_ingestion_workflow
 from src.anomaly_fusion import detect_and_persist_anomalies
 from src.config import get_alteryx_settings, get_paths
@@ -280,6 +282,8 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
         stage_metrics["drift"] = {"error": f"drift detection failed: {type(exc).__name__}"}
 
     # Stage 9 - automated Excel & PDF reports (Phase 33) - advisory only, never affects status
+    excel_path: Path | None = None
+    pdf_path: Path | None = None
     try:
         excel_path, pdf_path = generate_reports(
             db, result.run_id, dq_report=dq_report, reports_dir=paths.reports,
@@ -287,6 +291,18 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
         stage_metrics["report"] = {"excel": str(excel_path), "pdf": str(pdf_path)}
     except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
         stage_metrics["report"] = {"error": f"report generation failed: {type(exc).__name__}"}
+
+    # Stage 10 - severity-routed alerts & email engine (Phase 34) - advisory only, never affects status
+    try:
+        alerts = dispatch_alerts(db, excel_path=excel_path, pdf_path=pdf_path)
+        stage_metrics["alert"] = {
+            "count": len(alerts),
+            "emails_sent": sum(1 for a in alerts if a["email_sent"]),
+            "by_route": {route: sum(1 for a in alerts if a["route"] == route)
+                        for route in ("dashboard", "streamlit", "email", "immediate_email")},
+        }
+    except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
+        stage_metrics["alert"] = {"error": f"alert dispatch failed: {type(exc).__name__}"}
 
     error = (f"data quality gate rejected the run: overall score "
              f"{dq_report.overall_score} < {thresholds()[1]}" if dq_report.gate == "REJECT"
@@ -318,7 +334,8 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
           f"DQ {dq_report.overall_score} ({dq_report.gate}) - "
           f"anomalies {stage_metrics['anomalies'].get('count', 'n/a')} - "
           f"drift {stage_metrics['drift'].get('count', 'n/a')} - "
-          f"report {'ok' if 'error' not in stage_metrics['report'] else 'failed'} - {status}")
+          f"report {'ok' if 'error' not in stage_metrics['report'] else 'failed'} - "
+          f"alerts {stage_metrics['alert'].get('count', 'n/a')} - {status}")
     return 9 if dq_report.gate == "REJECT" else 0
 
 
