@@ -1,0 +1,119 @@
+// ============================================================================
+// InsightForge AI - Power BI DAX measures library (Phase 31 / spec Phase 60,
+// part of FR-23).
+// ----------------------------------------------------------------------------
+// Real DAX - paste each measure below into the named table in Power BI
+// Desktop's Model view (right-click table -> New measure). Grouped by the
+// table each measure belongs to.
+//
+// The 10 "KPI measures" reuse the exact formulas already documented in
+// docs/kpi-engine.md / sql/kpi_queries.sql (Phase 15) - no new formula is
+// invented here, only translated from SQL to DAX. The "insight measures"
+// are this project's own reasonable additions for Phase 32's Risk &
+// Anomalies / Forecast / Pipeline Health pages (spec names the pages, not
+// their measures) - same "spec silent, own documented choice" pattern as
+// every prior phase.
+//
+// Full design rationale: docs/powerbi-data-model.md
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Table: fact_sales - the 10 KPI measures (docs/kpi-engine.md)
+// ---------------------------------------------------------------------------
+
+// Revenue -- matches SUM(revenue)
+Revenue = SUM(fact_sales[revenue])
+
+// Profit -- matches SUM(profit)
+Profit = SUM(fact_sales[profit])
+
+// Margin % -- matches 100 * SUM(profit) / NULLIF(SUM(revenue), 0)
+Margin % = DIVIDE([Profit], [Revenue])
+
+// Orders -- matches COUNT(DISTINCT order_id)
+Orders = DISTINCTCOUNT(fact_sales[order_id])
+
+// Customers -- matches COUNT(DISTINCT customer_id)
+Customers = DISTINCTCOUNT(fact_sales[customer_id])
+
+// Units -- matches SUM(quantity)
+Units = SUM(fact_sales[quantity])
+
+// AOV -- matches SUM(revenue) / NULLIF(COUNT(DISTINCT order_id), 0)
+AOV = DIVIDE([Revenue], [Orders])
+
+// Return Rate % -- matches 100 * COUNT(*) FILTER (WHERE is_returned) / NULLIF(COUNT(*), 0)
+Return Rate % =
+DIVIDE(
+    CALCULATE(COUNTROWS(fact_sales), fact_sales[is_returned] = TRUE),
+    COUNTROWS(fact_sales)
+)
+
+// Avg Discount % -- matches 100 * AVG(discount)
+Avg Discount % = AVERAGE(fact_sales[discount]) * 100
+
+// Avg Shipping Days -- matches AVG(shipping_days), NULLs (Pending/Cancelled) excluded automatically
+Avg Shipping Days = AVERAGE(fact_sales[shipping_days])
+
+// ---------------------------------------------------------------------------
+// Table: anomalies - Risk & Anomalies page
+// ---------------------------------------------------------------------------
+
+// Anomaly Count -- rows in the current filter context
+Anomaly Count = COUNTROWS(anomalies)
+
+// Critical Anomalies -- severity = 'CRITICAL' (src/anomaly_fusion.py's own band)
+Critical Anomalies = CALCULATE(COUNTROWS(anomalies), anomalies[severity] = "CRITICAL")
+
+// Avg Anomaly Confidence -- 0-1, matches anomalies.confidence
+Avg Anomaly Confidence = AVERAGE(anomalies[confidence])
+
+// ---------------------------------------------------------------------------
+// Table: recommendations - Risk & Anomalies / Overview page
+// ---------------------------------------------------------------------------
+
+// Open Recommendations -- status = 'open' (recommendations table default)
+Open Recommendations = CALCULATE(COUNTROWS(recommendations), recommendations[status] = "open")
+
+// Avg Priority Score -- 0-100, matches recommendations.priority_score
+Avg Priority Score = AVERAGE(recommendations[priority_score])
+
+// ---------------------------------------------------------------------------
+// Table: forecast_results - Forecast page
+// ---------------------------------------------------------------------------
+
+// Avg Forecast MAPE % -- matches forecast_results.mape (backtested accuracy, src/forecasting.py)
+Avg Forecast MAPE % = AVERAGE(forecast_results[mape])
+
+// Latest Forecast Value -- the most recent forecast_date's forecast_value in context
+Latest Forecast Value =
+CALCULATE(
+    SUM(forecast_results[forecast_value]),
+    forecast_results[forecast_date] = MAX(forecast_results[forecast_date])
+)
+
+// ---------------------------------------------------------------------------
+// Table: data_quality_results - Pipeline Health page
+// ---------------------------------------------------------------------------
+
+// Latest DQ Score -- the 'Overall' dimension row from the most recent run (src/data_quality.py)
+Latest DQ Score =
+CALCULATE(
+    AVERAGE(data_quality_results[score]),
+    data_quality_results[dimension] = "Overall",
+    data_quality_results[run_id] = MAX(data_quality_results[run_id])
+)
+
+// ---------------------------------------------------------------------------
+// Table: pipeline_runs - Pipeline Health page
+// ---------------------------------------------------------------------------
+
+// Pipeline Success Rate % -- SUCCESS + WARNING count out of all closed runs
+Pipeline Success Rate % =
+DIVIDE(
+    CALCULATE(COUNTROWS(pipeline_runs), pipeline_runs[status] IN {"SUCCESS", "WARNING"}),
+    CALCULATE(COUNTROWS(pipeline_runs), pipeline_runs[status] <> "RUNNING")
+)
+
+// Failed Runs -- status = 'FAILED'
+Failed Runs = CALCULATE(COUNTROWS(pipeline_runs), pipeline_runs[status] = "FAILED")
