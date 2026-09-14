@@ -9,14 +9,16 @@ Working stages: **ingestion** (``src/ingestion.py``), **schema validation**
 workflows** (``src/alteryx.py``, Phase 12), the **star-schema load**
 (``src/etl.py``, Phase 13), the **data quality engine & gate**
 (``src/data_quality.py``, Phase 14), **anomaly fusion**
-(``src/anomaly_fusion.py``, Phase 20), and **drift detection**
-(``src/drift_detection.py``, Phase 21). The DQ gate gives the run its
+(``src/anomaly_fusion.py``, Phase 20), **drift detection**
+(``src/drift_detection.py``, Phase 21), and **automated reporting**
+(``src/reporting.py``, Phase 33). The DQ gate gives the run its
 terminal status: ``>=95`` score -> ``SUCCESS``, ``90-94.99`` -> ``WARNING``
 (the run still completed), ``<90`` -> ``FAILED`` - an audit-only REJECT that
 never deletes or rolls back rows Phase 13 already loaded into
-``fact_sales``. Anomaly fusion and drift detection run after the gate and
-never change the terminal status - both are advisory analytics (a failure
-in either is logged into ``stage_metrics``, never fails the run).
+``fact_sales``. Anomaly fusion, drift detection, and reporting all run after
+the gate and never change the terminal status - each is advisory analytics
+(a failure in any of them is logged into ``stage_metrics``, never fails the
+run).
 
 Exit codes: ``0`` ok (includes a DQ ``WARNING``), ``2`` no mode chosen,
 ``3`` nothing to do / mode not built yet, ``4`` database unavailable, ``5`` a
@@ -48,6 +50,7 @@ from src.database import Database, DatabaseError
 from src.drift_detection import detect_and_persist_drift
 from src.etl import EtlLoadError, run_sales_etl_workflow
 from src.ingestion import IngestionError, IngestionResult, ingest_file
+from src.reporting import generate_reports
 from src.validation import ValidationResult, validate_csv
 
 logger = logging.getLogger(__name__)
@@ -276,6 +279,15 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
     except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
         stage_metrics["drift"] = {"error": f"drift detection failed: {type(exc).__name__}"}
 
+    # Stage 9 - automated Excel & PDF reports (Phase 33) - advisory only, never affects status
+    try:
+        excel_path, pdf_path = generate_reports(
+            db, result.run_id, dq_report=dq_report, reports_dir=paths.reports,
+        )
+        stage_metrics["report"] = {"excel": str(excel_path), "pdf": str(pdf_path)}
+    except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
+        stage_metrics["report"] = {"error": f"report generation failed: {type(exc).__name__}"}
+
     error = (f"data quality gate rejected the run: overall score "
              f"{dq_report.overall_score} < {thresholds()[1]}" if dq_report.gate == "REJECT"
              else None)
@@ -305,7 +317,8 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
           f"({etl_result.summary.get('rows_loaded', 0)} rows loaded) - "
           f"DQ {dq_report.overall_score} ({dq_report.gate}) - "
           f"anomalies {stage_metrics['anomalies'].get('count', 'n/a')} - "
-          f"drift {stage_metrics['drift'].get('count', 'n/a')} - {status}")
+          f"drift {stage_metrics['drift'].get('count', 'n/a')} - "
+          f"report {'ok' if 'error' not in stage_metrics['report'] else 'failed'} - {status}")
     return 9 if dq_report.gate == "REJECT" else 0
 
 
