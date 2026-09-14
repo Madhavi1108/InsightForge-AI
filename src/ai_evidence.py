@@ -1,287 +1,393 @@
-"""InsightForge AI - AI evidence layer (Phase 27 / spec Phase 53, part of
-FR-20).
+"""InsightForge AI - AI evidence layer (Phase 27 / spec Phase 53, FR-20).
 
-Assembles a structured, **verified** evidence package for one metric -
-current/previous/change, primary region/category, business impact, forecast
-trend, matching anomaly and recommendations - from the outputs of
-already-built analytics modules. **No new analytics, no LLM call.**
+The spec (verbatim, ``docs/system-components.md``): "assemble a structured,
+verified evidence package (metric, current, previous, change %, primary
+region, primary category, impact, ...) before any LLM call." ``docs/data-flow
+.md`` row 15: "``anomalies``, ``recommendations``, RCA, impact -> evidence
+package -> AI Analyst text | LLM consumes verified evidence only; template
+fallback if no LLM."
 
-``docs/system-components.md`` (verbatim): "`src/ai_evidence.py` (new Phase
-27) - Responsibility: assemble a structured, verified evidence package
-(metric, current, previous, change %, primary region, primary category,
-impact, ...) before any LLM call." That boundary is deliberate -
-``docs/security.md`` section 3: "The LLM receives a **structured evidence
-package** built from verified analytical results... The LLM must not invent
-numbers - every figure in an explanation traces to the evidence package."
-Phase 27 (this module) builds that package; Phase 28 (``src/ai_analyst.py``,
-not yet built) is what actually calls Gemini or falls back to a
-deterministic template - this module never imports ``google.generativeai``
-and never makes a network call.
+This module makes **no LLM call** and adds no new dependency, environment
+variable, or database table - that is Phase 28 (``src/ai_analyst.py``, the
+explanation engine, not built yet). Phase 27's entire job is to be the
+strict, typed contract Phase 28's prompt builder (or template fallback) can
+rely on **by construction**: every :class:`EvidencePackage` field is either
+copied verbatim from an already-verified module's dataclass/DB row (Phases
+17/20/22/23/25/26 - ``change_detection``, the persisted ``anomalies`` table,
+``root_cause``, ``impact_analysis``, ``forecasting``, the persisted
+``recommendations`` table), or is a small, documented, deterministic
+derivation (:func:`compute_confidence`, a forecast trend label) with its
+formula spelled out below - never a number invented on the spot. This is
+what "the LLM is an explanation/interface layer only ... and never invents
+figures" (dev rule 3) means in practice: Phase 27 is the enforcement point.
 
-**On-demand, no persistence, not orchestrator-wired** - same shape as
-Phases 17/22/23/24 (change detection/RCA/impact/RFM): no table in
-``sql/schema.sql`` stores an "evidence package" (there is no ``evidence``
-table), and assembling one needs cross-cutting, whole-history analytics
-(change, RCA, impact, forecast, recommendations, anomalies), not a single
-just-ingested file's dates.
+**Design choice - the anomaly -> recommendation join key.** ``sql/schema
+.sql``'s ``recommendations`` table has no ``metric``/``period_key`` column,
+only ``linked_anomaly_id``. So a linked recommendation can only be found
+*through* a linked anomaly (``anomalies.anomaly_id ->
+recommendations.linked_anomaly_id``) - never by fuzzy-matching
+``rationale``/``detail`` text. When no anomaly is found for a metric/date,
+:attr:`EvidencePackage.recommendation` stays ``None`` even if ``src
+.recommendations``' own magnitude-based rules would have fired one - a
+documented limitation, not a bug (Phase 28 should prefer anomaly-confirmed
+evidence anyway).
 
-**Composition, not new formulas.** Every field is read from an existing
-module's own already-documented output:
+**On-demand, not wired into ``src/orchestrator.py``** - same shape as
+Phases 22-26 (RCA/impact/RFM/forecasting/recommendations): assembling
+evidence needs a period-over-period comparison plus best-effort
+cross-module context, not a single just-ingested file's dates. No table in
+``sql/schema.sql`` stores this output either - confirmed no ``evidence``
+table exists - so nothing here is persisted; the caller (Phase 28, or later
+a Streamlit page) consumes :class:`EvidencePackage` directly.
 
-- current/previous/pct_change/direction/significant -
-  :func:`src.change_detection.compare_period` (day grain).
-- primary_region/primary_category/root_cause_contribution/root_cause
-  _confidence - :func:`src.root_cause.analyze_root_cause`'s tiers, for
-  metrics it supports (revenue/profit/units).
-- expected/actual/gap/at_risk/customers_affected/orders_affected -
-  :func:`src.impact_analysis.assess_business_impact`, for revenue/profit.
-- forecast_trend/forecast_next_7d_value -
-  :func:`src.forecasting.forecast_metric` (7-day horizon), for
-  revenue/profit/orders.
-- anomaly_severity/anomaly_confidence - a small best-effort ``anomalies``
-  lookup, the same query shape as ``src.recommendations._lookup_anomaly``.
-- recommendations - :func:`src.recommendations.generate_recommendations`,
-  filtered to this metric.
-
-Every sub-lookup beyond the base day comparison is **best-effort and
-wrapped** (a failure degrades to that field being absent, never a
-fabricated number) - the same "advisory, never fails" convention every
-prior phase uses. ``sources`` records exactly which modules actually
-contributed a field, so every number in the package is traceable back to
-the analytics call that produced it (`docs/security.md`'s traceability
-requirement, one level further back than the explanation text itself).
-
-**Aggregate confidence** (this project's own documented choice, same "own
-aggregate formula" pattern as RCA's ``0.7*concentration + 0.3*evidence
-_strength``): the mean of whichever confidence signals are present -
-magnitude-based confidence (``min(1.0, magnitude / 100)``, the same formula
-``src.recommendations._magnitude_confidence`` uses) always contributes;
-``root_cause_confidence`` and ``anomaly_confidence`` contribute when
-available.
+**Day-grain-only enrichment.** RCA and business impact both need a single
+date; the ``anomalies`` table is populated per-day, not per-week/month.
+So :func:`assemble_evidence` only runs the RCA/impact/forecast/anomaly/
+recommendation lookups for ``grain="day"`` - the same restriction ``src
+.recommendations`` documents for its own enrichment.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
-from src.change_detection import compare_period
+from src.change_detection import ChangeRecord, compare_period
 from src.database import Database
 from src.forecasting import FORECAST_METRICS, forecast_metric
-from src.impact_analysis import IMPACT_METRICS, assess_business_impact
-from src.recommendations import generate_recommendations
-from src.root_cause import RCA_SUPPORTED_METRICS, analyze_root_cause
+from src.impact_analysis import BusinessImpactResult, assess_business_impact
+from src.root_cause import RCA_SUPPORTED_METRICS, RootCauseResult, analyze_root_cause
+
+
+# --------------------------------------------------------------------------- #
+# Dataclasses
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class RootCauseSummary:
+    """Flattened view of a :class:`~src.root_cause.RootCauseResult` - named
+    ``primary_*`` fields per hierarchy tier (Region -> Category ->
+    Sub-Category -> Product -> Customer Segment), matching the spec's own
+    "primary region, primary category" wording instead of a generic tier
+    list. A tier the drill-down never reached (it stops once a tier has no
+    rows left) stays ``None`` - never fabricated."""
+    primary_driver: str | None
+    primary_region: str | None
+    primary_category: str | None
+    primary_sub_category: str | None
+    primary_product: str | None
+    primary_customer_segment: str | None
+    contribution: float | None
+    confidence: float | None
+
+
+@dataclass(frozen=True)
+class ForecastSummary:
+    """Compact corroboration signal - trend direction + magnitude, not the
+    full list of forecast points (a "does the forecast agree" flag, not a
+    chart)."""
+    horizon_days: int
+    trend: str  # "up" | "down" | "flat"
+    first_value: float | None
+    last_value: float | None
+    mape: float | None
+
+
+@dataclass(frozen=True)
+class AnomalyLink:
+    """Best-effort persisted ``anomalies`` row for this metric/date (Phase
+    20's fused, 4-detector severity/confidence)."""
+    anomaly_id: int
+    severity: str
+    confidence: float | None
+
+
+@dataclass(frozen=True)
+class RecommendationLink:
+    """Best-effort persisted ``recommendations`` row, reached only via
+    :attr:`AnomalyLink.anomaly_id` (see module docstring - the only clean
+    join key)."""
+    recommendation_id: int
+    title: str
+    priority_band: str
+    priority_score: float | None
 
 
 @dataclass(frozen=True)
 class EvidencePackage:
+    """One structured, verified evidence package for one metric's latest
+    complete-period change - the sole input Phase 28's LLM prompt (or
+    template fallback) may use. Every field traces to an existing verified
+    module; nothing here is computed from scratch beyond the documented,
+    deterministic derivations in this module."""
     metric: str
+    grain: str
     period_key: str
     previous_period_key: str
     current: float | int | None
     previous: float | int | None
     pct_change: float | None
-    direction: str
+    direction: str  # "up" | "down" | "flat"
+    magnitude: float | None
     significant: bool
-    primary_region: str | None
-    primary_category: str | None
-    root_cause_contribution: float | None
-    root_cause_confidence: float | None
-    expected: float | None
-    actual: float | None
-    gap: float | None
-    at_risk: float | None
-    customers_affected: int | None
-    orders_affected: int | None
-    forecast_trend: str | None
-    forecast_next_7d_value: float | None
-    anomaly_severity: str | None
-    anomaly_confidence: float | None
-    recommendations: list[dict] = field(default_factory=list)
-    confidence: float = 0.0
-    sources: list[str] = field(default_factory=list)
+    root_cause: RootCauseSummary | None
+    impact: BusinessImpactResult | None
+    forecast: ForecastSummary | None
+    anomaly: AnomalyLink | None
+    recommendation: RecommendationLink | None
+    confidence: float
+    notes: list[str] = field(default_factory=list)
 
-
-def evidence_package_to_dict(pkg: EvidencePackage) -> dict:
-    """Flat, JSON-serialisable form - the exact shape Phase 28 will hand to
-    Gemini (or the deterministic template)."""
-    return {
-        "metric": pkg.metric, "period_key": pkg.period_key,
-        "previous_period_key": pkg.previous_period_key,
-        "current": pkg.current, "previous": pkg.previous, "pct_change": pkg.pct_change,
-        "direction": pkg.direction, "significant": pkg.significant,
-        "primary_region": pkg.primary_region, "primary_category": pkg.primary_category,
-        "root_cause_contribution": pkg.root_cause_contribution,
-        "root_cause_confidence": pkg.root_cause_confidence,
-        "expected": pkg.expected, "actual": pkg.actual, "gap": pkg.gap, "at_risk": pkg.at_risk,
-        "customers_affected": pkg.customers_affected, "orders_affected": pkg.orders_affected,
-        "forecast_trend": pkg.forecast_trend, "forecast_next_7d_value": pkg.forecast_next_7d_value,
-        "anomaly_severity": pkg.anomaly_severity, "anomaly_confidence": pkg.anomaly_confidence,
-        "recommendations": list(pkg.recommendations),
-        "confidence": pkg.confidence, "sources": list(pkg.sources),
-    }
+    def to_dict(self) -> dict:
+        """JSON-serializable representation for Phase 28's LLM prompt -
+        ``dataclasses.asdict`` handles the nested frozen dataclasses (and
+        their ``None``\\ s) automatically; no field is duplicated by hand."""
+        return asdict(self)
 
 
 # --------------------------------------------------------------------------- #
 # Pure core - no database
 # --------------------------------------------------------------------------- #
-def aggregate_confidence(signals: list[float]) -> float:
-    """The mean of whichever confidence signals are present. ``0.0`` for an
-    empty list - never fabricates confidence from nothing."""
-    if not signals:
-        return 0.0
-    return round(sum(signals) / len(signals), 4)
-
-
 def _magnitude_confidence(magnitude: float | None) -> float:
-    """Same formula as ``src.recommendations._magnitude_confidence`` -
-    duplicated (not imported) since it's a small, module-owned pure helper,
-    the same convention every other phase follows for its own thresholds."""
+    """Same formula as ``src.recommendations._magnitude_confidence``
+    (documented, intentionally mirrored rather than imported - keeps this
+    module a self-contained pure core, like every prior phase)."""
     if magnitude is None:
-        return 0.6
+        return 0.6  # zero-to-nonzero / undefined pct change - moderate, documented default
     return round(min(1.0, magnitude / 100.0), 4)
 
 
+def compute_confidence(
+    magnitude: float | None,
+    rca_confidence: float | None,
+    anomaly_confidence: float | None,
+) -> float:
+    """0-1 composite evidence confidence.
+
+    Precedence (documented, not fabricated - mirrors ``src.recommendations``'
+    "anomaly upgrade supersedes magnitude estimate" convention):
+    - both ``rca_confidence`` and ``anomaly_confidence`` available -> their
+      mean (two independent corroborating signals);
+    - only one available -> that one;
+    - neither available -> :func:`_magnitude_confidence`, the same
+      change-record-only baseline ``src.recommendations`` falls back to.
+    """
+    signals = [c for c in (rca_confidence, anomaly_confidence) if c is not None]
+    if signals:
+        return round(sum(signals) / len(signals), 4)
+    return _magnitude_confidence(magnitude)
+
+
+def summarize_root_cause(result: RootCauseResult | None) -> RootCauseSummary | None:
+    """``None``-safe flatten of ``result.tiers`` (keyed by dimension) into
+    named ``primary_*`` fields. ``None`` when ``result`` is ``None`` or has
+    no tiers."""
+    if result is None or not result.tiers:
+        return None
+    by_dim = {t.dimension: t.primary_value for t in result.tiers}
+    return RootCauseSummary(
+        primary_driver=result.primary_driver,
+        primary_region=by_dim.get("region"),
+        primary_category=by_dim.get("category"),
+        primary_sub_category=by_dim.get("sub_category"),
+        primary_product=by_dim.get("product"),
+        primary_customer_segment=by_dim.get("customer_segment"),
+        contribution=result.contribution,
+        confidence=result.confidence,
+    )
+
+
+def summarize_forecast(points: list | None, horizon_days: int) -> ForecastSummary | None:
+    """Pure trend summary from a ``forecast_metric()`` list of forecast
+    points (same first/last-value trend logic as ``src.recommendations
+    ._forecast_note``, but returns a structured summary instead of prose).
+    ``None`` for an empty/``None`` list."""
+    if not points:
+        return None
+    first, last = points[0].forecast_value, points[-1].forecast_value
+    trend = "up" if last > first else "down" if last < first else "flat"
+    return ForecastSummary(
+        horizon_days=horizon_days, trend=trend,
+        first_value=first, last_value=last, mape=points[-1].mape,
+    )
+
+
+def build_notes(
+    change: ChangeRecord,
+    root_cause: RootCauseSummary | None,
+    forecast: ForecastSummary | None,
+    anomaly: AnomalyLink | None,
+) -> list[str]:
+    """Human-readable evidence trail - each entry traceable to a field
+    already on the package. Used by Phase 28's deterministic template
+    fallback when no LLM is available, and optionally surfaced in the LLM
+    prompt as pre-verified talking points the model must not contradict."""
+    notes: list[str] = []
+    pct = f"{change.pct_change:.1f}%" if change.pct_change is not None else "an undefined amount"
+    notes.append(f"{change.metric} moved {change.direction} {pct} "
+                 f"({change.previous_period_key} -> {change.period_key}).")
+    if root_cause is not None:
+        notes.append(f"Primary driver: {root_cause.primary_driver} "
+                      f"(contribution {root_cause.contribution}, confidence {root_cause.confidence}).")
+    if forecast is not None:
+        notes.append(f"{forecast.horizon_days}-day forecast trend: {forecast.trend}.")
+    if anomaly is not None:
+        notes.append(f"Linked anomaly (severity {anomaly.severity}, "
+                      f"confidence {anomaly.confidence}).")
+    return notes
+
+
 # --------------------------------------------------------------------------- #
-# DB-querying wrapper
+# DB-querying wrapper - best-effort, mirrors src.recommendations exactly
 # --------------------------------------------------------------------------- #
-def _lookup_anomaly(db: Database, metric: str, period_key: str) -> dict | None:
-    """Best-effort: the highest-confidence persisted ``anomalies`` row for
-    this metric/date, or ``None`` on no match or any DB error. Mirrors
-    ``src.recommendations._lookup_anomaly``'s query shape."""
+def _lookup_anomaly(db: Database, metric: str, period_key: str) -> AnomalyLink | None:
+    """Highest-confidence persisted ``anomalies`` row for this metric/date,
+    or ``None`` on no match or any DB error - best-effort, never fatal."""
     try:
         rows = db.fetch_all(
-            "SELECT severity, confidence FROM anomalies "
+            "SELECT anomaly_id, severity, confidence FROM anomalies "
             "WHERE metric = :metric AND anomaly_date = :date "
             "ORDER BY confidence DESC NULLS LAST LIMIT 1",
             {"metric": metric, "date": period_key},
         )
     except Exception:  # noqa: BLE001 - best-effort enrichment, never fatal
         return None
-    return dict(rows[0]) if rows else None
+    if not rows:
+        return None
+    row = rows[0]
+    return AnomalyLink(
+        anomaly_id=row["anomaly_id"], severity=row["severity"],
+        confidence=float(row["confidence"]) if row["confidence"] is not None else None,
+    )
 
 
-def _root_cause_fields(db: Database, metric: str, period_key: str, previous_period_key: str):
-    """``(primary_region, primary_category, contribution, confidence)``,
-    all ``None`` when unsupported or on any failure."""
+def _lookup_recommendation(db: Database, anomaly_id: int | None) -> RecommendationLink | None:
+    """Best-effort ``recommendations`` row linked to this ``anomaly_id`` -
+    the only clean join key (see module docstring). ``None`` when
+    ``anomaly_id`` is ``None``, on no match, or any DB error - never
+    fuzzy-matched from text."""
+    if anomaly_id is None:
+        return None
+    try:
+        rows = db.fetch_all(
+            "SELECT recommendation_id, title, priority_band, priority_score "
+            "FROM recommendations WHERE linked_anomaly_id = :aid "
+            "ORDER BY priority_score DESC NULLS LAST LIMIT 1",
+            {"aid": anomaly_id},
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    if not rows:
+        return None
+    row = rows[0]
+    return RecommendationLink(
+        recommendation_id=row["recommendation_id"], title=row["title"],
+        priority_band=row["priority_band"],
+        priority_score=float(row["priority_score"]) if row["priority_score"] is not None else None,
+    )
+
+
+def _lookup_root_cause(
+    db: Database, metric: str, period_key: str, previous_period_key: str,
+) -> RootCauseSummary | None:
+    """Best-effort ``analyze_root_cause`` -> :func:`summarize_root_cause`;
+    ``None`` for a metric outside ``RCA_SUPPORTED_METRICS``, insufficient
+    data, or any error. Day-grain only (RCA needs single-day start==end
+    bounds, same restriction ``src.recommendations`` documents)."""
     if metric not in RCA_SUPPORTED_METRICS:
-        return None, None, None, None
+        return None
     try:
         result = analyze_root_cause(
             db, metric, period_key, period_key, previous_period_key, previous_period_key,
         )
     except Exception:  # noqa: BLE001
-        return None, None, None, None
-    if not result.tiers:
-        return None, None, None, None
-    region = next((t.primary_value for t in result.tiers if t.dimension == "region"), None)
-    category = next((t.primary_value for t in result.tiers if t.dimension == "category"), None)
-    return region, category, result.contribution, result.confidence
+        return None
+    return summarize_root_cause(result)
 
 
-def _impact_fields(db: Database, metric: str, period_key: str):
-    """``(expected, actual, gap, at_risk, customers_affected,
-    orders_affected)``, all ``None`` when unsupported or on any failure."""
-    if metric not in IMPACT_METRICS:
-        return None, None, None, None, None, None
+def _lookup_impact(db: Database, period_key: str) -> BusinessImpactResult | None:
+    """Best-effort ``assess_business_impact`` for this date (always
+    computes both revenue and profit gap/at-risk, regardless of the
+    triggering metric - ``impact_analysis`` has no per-metric mode). ``None``
+    on no rolling-baseline coverage yet or any DB error."""
     try:
-        result = assess_business_impact(db, date=period_key)
+        return assess_business_impact(db, date=period_key)
     except Exception:  # noqa: BLE001
-        return None, None, None, None, None, None
-    if result is None:
-        return None, None, None, None, None, None
-    if metric == "revenue":
-        return (result.expected_revenue, result.actual_revenue, result.revenue_gap,
-                result.revenue_at_risk, result.customers_affected, result.orders_affected)
-    return (result.expected_profit, result.actual_profit, result.profit_gap,
-            result.profit_at_risk, result.customers_affected, result.orders_affected)
-
-
-def _forecast_fields(db: Database, metric: str):
-    """``(trend, next_7d_value)``, ``(None, None)`` when unsupported, no
-    forecast could be produced, or on any failure."""
-    if metric not in FORECAST_METRICS:
-        return None, None
-    try:
-        points = forecast_metric(db, metric, horizon=7)
-    except Exception:  # noqa: BLE001
-        return None, None
-    if not points:
-        return None, None
-    first, last = points[0].forecast_value, points[-1].forecast_value
-    trend = "up" if last > first else "down" if last < first else "flat"
-    return trend, last
-
-
-def _matching_recommendations(db: Database, metric: str) -> list[dict]:
-    """Best-effort: this metric's slice of :func:`src.recommendations
-    .generate_recommendations`'s day-grain output, as plain dicts."""
-    try:
-        recs = generate_recommendations(db, grain="day")
-    except Exception:  # noqa: BLE001
-        return []
-    return [
-        {"rule_id": r.rule_id, "title": r.title, "priority_score": r.priority_score,
-         "priority_band": r.priority_band}
-        for r in recs if r.metric == metric
-    ]
-
-
-def assemble_evidence(db: Database, metric: str) -> EvidencePackage | None:
-    """The full :class:`EvidencePackage` for ``metric``, or ``None`` when
-    there isn't yet a day-over-day comparison for it (too little history -
-    :func:`src.change_detection.compare_period` needs 2+ complete days).
-    """
-    records = compare_period(db, "day")
-    records_by_metric = {r.metric: r for r in records}
-    record = records_by_metric.get(metric)
-    if record is None:
         return None
 
-    sources = ["change_detection"]
 
-    region, category, rc_contribution, rc_confidence = _root_cause_fields(
-        db, metric, record.period_key, record.previous_period_key,
+def _lookup_forecast(db: Database, metric: str, horizon: int = 7) -> ForecastSummary | None:
+    """Best-effort ``forecast_metric`` -> :func:`summarize_forecast`;
+    ``None`` for a metric outside ``FORECAST_METRICS``, insufficient
+    history, or any error."""
+    if metric not in FORECAST_METRICS:
+        return None
+    try:
+        points = forecast_metric(db, metric, horizon=horizon)
+    except Exception:  # noqa: BLE001
+        return None
+    return summarize_forecast(points, horizon)
+
+
+# --------------------------------------------------------------------------- #
+# Top-level entry points
+# --------------------------------------------------------------------------- #
+def _build_package(db: Database, record: ChangeRecord) -> EvidencePackage:
+    """Shared assembly for one ``ChangeRecord`` - the actual lookups, notes,
+    and confidence composition, factored out so :func:`assemble_evidence`
+    and :func:`assemble_all_evidence` never duplicate this logic."""
+    root_cause = None
+    impact = None
+    forecast = None
+    anomaly = None
+    recommendation = None
+
+    if record.grain == "day":
+        root_cause = _lookup_root_cause(db, record.metric, record.period_key, record.previous_period_key)
+        impact = _lookup_impact(db, record.period_key)
+        forecast = _lookup_forecast(db, record.metric)
+        anomaly = _lookup_anomaly(db, record.metric, record.period_key)
+        recommendation = _lookup_recommendation(db, anomaly.anomaly_id if anomaly else None)
+
+    confidence = compute_confidence(
+        record.magnitude,
+        root_cause.confidence if root_cause else None,
+        anomaly.confidence if anomaly else None,
     )
-    if rc_confidence is not None:
-        sources.append("root_cause")
-
-    expected, actual, gap, at_risk, customers_affected, orders_affected = _impact_fields(
-        db, metric, record.period_key,
-    )
-    if expected is not None:
-        sources.append("impact_analysis")
-
-    forecast_trend, forecast_next_7d_value = _forecast_fields(db, metric)
-    if forecast_trend is not None:
-        sources.append("forecasting")
-
-    anomaly_row = _lookup_anomaly(db, metric, record.period_key)
-    anomaly_severity = anomaly_row.get("severity") if anomaly_row else None
-    anomaly_confidence = anomaly_row.get("confidence") if anomaly_row else None
-    if anomaly_row is not None:
-        sources.append("anomalies")
-    if anomaly_confidence is not None:
-        anomaly_confidence = float(anomaly_confidence)
-
-    recs = _matching_recommendations(db, metric)
-    if recs:
-        sources.append("recommendations")
-
-    confidence_signals = [_magnitude_confidence(record.magnitude)]
-    if rc_confidence is not None:
-        confidence_signals.append(rc_confidence)
-    if anomaly_confidence is not None:
-        confidence_signals.append(anomaly_confidence)
+    notes = build_notes(record, root_cause, forecast, anomaly)
 
     return EvidencePackage(
-        metric=metric, period_key=record.period_key, previous_period_key=record.previous_period_key,
+        metric=record.metric, grain=record.grain,
+        period_key=record.period_key, previous_period_key=record.previous_period_key,
         current=record.current, previous=record.previous, pct_change=record.pct_change,
-        direction=record.direction, significant=record.significant,
-        primary_region=region, primary_category=category,
-        root_cause_contribution=rc_contribution, root_cause_confidence=rc_confidence,
-        expected=expected, actual=actual, gap=gap, at_risk=at_risk,
-        customers_affected=customers_affected, orders_affected=orders_affected,
-        forecast_trend=forecast_trend, forecast_next_7d_value=forecast_next_7d_value,
-        anomaly_severity=anomaly_severity, anomaly_confidence=anomaly_confidence,
-        recommendations=recs, confidence=aggregate_confidence(confidence_signals),
-        sources=sources,
+        direction=record.direction, magnitude=record.magnitude, significant=record.significant,
+        root_cause=root_cause, impact=impact, forecast=forecast,
+        anomaly=anomaly, recommendation=recommendation,
+        confidence=confidence, notes=notes,
     )
+
+
+def assemble_evidence(db: Database, metric: str, grain: str = "day") -> EvidencePackage | None:
+    """The evidence package for one metric's latest complete-period change,
+    or ``None`` when ``compare_period(db, grain)`` has no ``ChangeRecord``
+    for this metric yet (too little history - never fabricated).
+
+    No ``period_key``/``previous_period_key`` parameters: every upstream
+    module (``compare_period``, ``analyze_root_cause``,
+    ``assess_business_impact``) already resolves "latest complete period"
+    itself, so this function assembles evidence for whatever period those
+    modules already agree is current - matching
+    ``generate_recommendations(db, grain="day", ...)``'s own signature
+    shape.
+    """
+    records = compare_period(db, grain)
+    record = next((r for r in records if r.metric == metric), None)
+    if record is None:
+        return None
+    return _build_package(db, record)
+
+
+def assemble_all_evidence(db: Database, grain: str = "day") -> list[EvidencePackage]:
+    """:func:`assemble_evidence` for every metric ``compare_period(db,
+    grain)`` returns a ``ChangeRecord`` for - the "every metric" shape a
+    caller answering a broad question ("Summarize this month", "What are
+    the biggest risks?") needs, without looping over metrics itself."""
+    records = compare_period(db, grain)
+    return [_build_package(db, r) for r in records]

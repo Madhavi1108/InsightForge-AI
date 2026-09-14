@@ -261,3 +261,48 @@ def get_alteryx_settings() -> AlteryxSettings:
     """Load ``.env`` then resolve :class:`AlteryxSettings` (cached)."""
     load_env()
     return AlteryxSettings.from_env()
+
+
+# --------------------------------------------------------------------------- #
+# LLM / AI Analyst (Phase 28)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class LlmSettings:
+    """Provider-selection settings for the AI Analyst (``src/ai_analyst.py``).
+
+    Same "configured means a real call is attempted, else a deterministic
+    fallback" shape as :class:`AlteryxSettings`: a blank/unset
+    ``GEMINI_API_KEY`` (or ``LLM_PROVIDER`` set to anything but ``gemini``)
+    means no LLM call is ever attempted - the AI Analyst runs its template
+    path exclusively, never faked as an LLM answer.
+    """
+
+    provider: str  # "gemini" | "none" (template-only)
+    api_key: str | None
+    model: str
+    timeout_seconds: int
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "LlmSettings":
+        env = os.environ if environ is None else environ
+        provider = (env.get("LLM_PROVIDER", "gemini").strip() or "gemini").lower()
+        api_key = env.get("GEMINI_API_KEY", "").strip() or None
+        model = env.get("GEMINI_MODEL", "gemini-1.5-pro").strip() or "gemini-1.5-pro"
+        try:
+            timeout_seconds = int(env.get("LLM_TIMEOUT_SECONDS", "30").strip() or 30)
+        except ValueError:
+            timeout_seconds = 30
+        return cls(provider=provider, api_key=api_key, model=model, timeout_seconds=timeout_seconds)
+
+    def is_configured(self) -> bool:
+        """True only when the provider is ``"gemini"`` and an API key is
+        set - same "configured means real, else fallback" shape as
+        :meth:`AlteryxSettings.is_configured`."""
+        return self.provider == "gemini" and bool(self.api_key)
+
+
+@lru_cache(maxsize=1)
+def get_llm_settings() -> LlmSettings:
+    """Load ``.env`` then resolve :class:`LlmSettings` (cached)."""
+    load_env()
+    return LlmSettings.from_env()
