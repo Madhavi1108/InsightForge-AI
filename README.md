@@ -1,152 +1,250 @@
 # InsightForge AI
 
-**Autonomous Business Analytics & Decision Intelligence Platform**
+**Autonomous business analytics and decision intelligence for retail.**
 
-InsightForge AI automatically converts raw retail business data into validated,
-actionable intelligence. Drop a sales file into `data/incoming/` and the platform
-detects it, validates it, cleans and transforms it, loads it into PostgreSQL,
-recalculates KPIs, detects meaningful changes / anomalies / drift, finds likely
-root causes, quantifies business impact, forecasts future performance, generates
-evidence-based recommendations, explains the results with an evidence-grounded AI
-Analyst, and communicates everything through dashboards, reports, and alerts.
+InsightForge turns incoming sales data into governed, explainable decisions. It
+ingests files, validates them against a data contract, loads a PostgreSQL star
+schema, computes business KPIs, detects change, anomalies, and drift, identifies
+likely drivers, estimates impact, produces forecasts and recommendations, and
+delivers the result through dashboards, reports, alerts, and an evidence-grounded
+AI Analyst.
 
+The platform is designed around one operating principle:
+
+> **Detect -> Explain -> Quantify -> Predict -> Recommend -> Communicate**
+
+## Why InsightForge
+
+Most analytics workflows stop at a dashboard or a model score. InsightForge
+connects the full decision loop:
+
+- **Trusted data:** immutable raw files, SHA-256 fingerprinting, schema validation,
+  rejected-record lineage, and seven-dimension data-quality scoring.
+- **Decision intelligence:** KPI computation, period comparison, anomaly fusion,
+  PSI-based drift detection, root-cause contribution analysis, business impact,
+  customer RFM, product intelligence, and forecasting.
+- **Actionable outputs:** transparent recommendations with severity, confidence,
+  and impact; Excel and PDF reports; severity-routed alerts; Streamlit and Power BI
+  experiences.
+- **Grounded AI:** the AI Analyst explains verified evidence. Deterministic
+  analytics and PostgreSQL remain the source of numerical truth, with a template
+  fallback when Gemini is unavailable.
+- **Operational control:** one orchestrator, run-scoped audit records, structured
+  logs, retries for safe stages, failure recovery, and a controlled natural-language
+  to SQL safety boundary.
+
+## End-to-end workflow
+
+```text
+Incoming CSV
+    -> Detect and fingerprint
+    -> Validate against the data contract
+    -> Clean and transform
+    -> Load PostgreSQL star schema
+    -> Compute KPIs and analytical views
+    -> Detect changes, anomalies, and drift
+    -> Explain drivers and quantify impact
+    -> Forecast and recommend
+    -> Generate evidence-grounded explanations
+    -> Publish dashboards, reports, alerts, and audit records
 ```
-DATA -> DETECT -> VALIDATE -> CLEAN -> TRANSFORM -> STORE -> ANALYZE ->
-DETECT CHANGE -> DETECT ANOMALY -> DETECT DRIFT -> FIND ROOT CAUSE ->
-QUANTIFY IMPACT -> FORECAST -> RECOMMEND -> EXPLAIN WITH AI -> VISUALIZE ->
-REPORT -> ALERT -> AUDIT
-```
 
-Intelligence philosophy: **DETECT - EXPLAIN - QUANTIFY - PREDICT - RECOMMEND - COMMUNICATE**
+The same orchestration path supports a one-off file, a directory scan, a watched
+drop zone, and scheduled execution.
 
----
+## Architecture at a glance
 
-## Status
-
-Built incrementally against the 69-phase master specification
-(`INSIGHTFORGE AI.pdf`), consolidated into **36 build phases** (see
-[`docs/PHASE_MAP.md`](docs/PHASE_MAP.md) for the 69 -> 36 crosswalk - no scope is
-dropped). Current progress is tracked in
-[`docs/PHASE_STATUS.md`](docs/PHASE_STATUS.md).
-
-| Wave | Phases | Theme | State |
-|------|--------|-------|-------|
-| 0 | 0 | Project initialization | **Complete** |
-| 1 | 1-6 | Architecture, requirements, dataset, generation | **Complete** |
-| 2 | 7-14 | PostgreSQL, ingestion, validation, Alteryx, data quality | **Complete** |
-| 3 | 15-17 | SQL / KPIs / views / change detection | **Complete** |
-| 4 | 18-23 | Anomaly / drift / RCA / impact | Phases 18-22 of 6 complete |
-| 5 | 24-26 | RFM / product intel / forecast / recommendations | Not started |
-| 6 | 27-35 | AI Analyst / NL-to-SQL / Streamlit / Power BI / reporting / alerts / observability | Not started |
-| 7 | 36 | Security / testing / performance / final demo | Not started |
-
----
+| Layer | Responsibility | Primary implementation |
+| --- | --- | --- |
+| Ingestion | Detect files, fingerprint content, deduplicate, archive | `src/ingestion.py` |
+| Contract and quality | Validate structure, types, ranges, relationships, and quality | `config/data_contract.yaml`, `src/validation.py`, `src/data_quality.py` |
+| ETL and storage | Build dimensions and facts in an auditable star schema | `src/etl.py`, `sql/schema.sql`, PostgreSQL |
+| Analytics | KPIs, views, comparisons, anomalies, drift, RCA, impact | `sql/`, `src/change_detection.py`, `src/anomaly_*.py` |
+| Decision engines | RFM, product intelligence, forecasts, recommendations | `src/rfm.py`, `src/product_intelligence.py`, `src/forecasting.py`, `src/recommendations.py` |
+| AI and safety | Evidence packages, grounded answers, read-only NL-to-SQL | `src/ai_evidence.py`, `src/ai_analyst.py`, `src/nl_to_sql.py` |
+| Delivery | Streamlit, Power BI model, PDF/Excel, email alerts | `streamlit_app/`, `dashboard/`, `src/reporting.py`, `src/alerts.py` |
+| Operations | Orchestration, scheduling, retries, structured logs, audit trail | `src/orchestrator.py`, `src/scheduler.py`, `src/observability.py` |
 
 ## Technology stack
 
-| Layer | Tools |
-|-------|-------|
-| Data | Python, Pandas, NumPy, Alteryx |
-| Database | PostgreSQL, pgAdmin |
-| Analytics | SQL, Pandas, SciPy, scikit-learn |
-| ML | Z-score, IQR, rolling baseline, Isolation Forest, exponential smoothing |
-| BI | Power BI, DAX |
-| Application | Streamlit |
-| AI | Gemini LLM API, evidence-grounded AI Analyst, NL-to-SQL |
-| Reporting | ReportLab, openpyxl |
-| Automation | watchdog file watcher, APScheduler |
-| Version control | Git, GitHub |
+- **Runtime:** Python 3.12, pandas, NumPy, SciPy, scikit-learn
+- **Data platform:** PostgreSQL 16, SQLAlchemy, psycopg2
+- **Pipeline:** watchdog, APScheduler, Alteryx workflows with a Python fallback
+- **Intelligence:** SQL, deterministic Python analytics, Holt trend smoothing,
+  Isolation Forest, PSI, Gemini (optional)
+- **Delivery:** Streamlit, Power BI / DAX, ReportLab, XlsxWriter, openpyxl
+- **Testing:** pytest and pytest-cov
+- **Domain:** e-commerce and retail analytics using Indian geography
 
-Domain: **E-commerce / Retail** (Indian geography). Optional components
-(Docker, Airflow) never block the core system.
-
----
-
-## Repository layout
-
-```
-data/         raw + pipeline working directories (git-ignored contents)
-src/          application source (orchestrator, engines, connectors)
-sql/          schema, KPI queries, analytical views
-alteryx/      Alteryx .yxmd workflows + integration boundary docs
-dashboard/    Power BI model and report pages
-streamlit/    Streamlit application
-reports/      generated PDF / Excel reports (git-ignored contents)
-logs/         structured pipeline logs (git-ignored contents)
-tests/        pytest suite
-config/       data contract, settings, docker-compose for PostgreSQL
-scripts/      dataset generation and one-off utilities
-docs/         architecture, requirements, security, testing, PHASE_STATUS
-models/       trained ML artifacts (git-ignored contents)
-```
-
----
+Docker, Alteryx Designer, Power BI Desktop, and Gemini are optional at different
+boundaries. The core Python pipeline remains the execution fallback where those
+tools are unavailable.
 
 ## Quick start
 
-### 1. Prerequisites
+### Prerequisites
 
 - Python 3.12
-- Docker (for the PostgreSQL container) — added in Phase 7
-- Power BI Desktop (for the BI model) — added in Phase 31
-- Alteryx Designer *(optional)* — workflows and a Python ETL fallback are both provided
+- Docker Desktop with Docker Compose
+- Power BI Desktop for the Power BI model (optional)
+- Alteryx Designer for native workflow execution (optional)
 
-### 2. Environment
+### 1. Create the environment
 
 ```powershell
-# from the project root
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-
-# configure secrets
 copy .env.example .env
-# then edit .env with real values
 ```
+
+Edit `.env` with local PostgreSQL credentials and any optional Gemini or SMTP
+settings. Never commit `.env` or credentials.
+
+### 2. Start PostgreSQL and apply the schema
+
+```powershell
+docker compose -f config/docker-compose.postgres.yml up -d
+python scripts/apply_schema.py
+```
+
+The database setup runbook, environment variables, and troubleshooting guidance
+are in [`docs/database-setup.md`](docs/database-setup.md).
 
 ### 3. Run the pipeline
 
-```powershell
-# start PostgreSQL and create the schema (Phases 7-8)
-python scripts/postgres.py up
-python scripts/apply_schema.py
+Place a CSV matching the contract in `data/incoming/`, then choose an entry point:
 
-# ingest files (Phase 10): one file, a sweep, or watch the drop zone
-python run_pipeline.py --file data/incoming/sales_2026_08_01.csv
+```powershell
+# Process one file
+python run_pipeline.py --file data/incoming/sales_2026_09_09.csv
+
+# Process all files currently in the drop zone
 python run_pipeline.py --scan
-python run_pipeline.py --watch        # Ctrl+C to stop
+
+# Watch for new CSV files until interrupted
+python run_pipeline.py --watch
+
+# Run the scheduled mode configured in .env
+python run_pipeline.py --scheduler
 ```
 
-Ingestion + SHA-256 fingerprinting ([`docs/ingestion.md`](docs/ingestion.md)),
-schema/contract validation ([`docs/validation.md`](docs/validation.md)), the
-Alteryx ingestion/data-quality workflows
-([`docs/alteryx-workflows.md`](docs/alteryx-workflows.md)), the
-sales/customer/product ETL that loads the star schema
-([`docs/star-schema-etl.md`](docs/star-schema-etl.md)), and the data quality
-engine + gate ([`docs/data-quality-engine.md`](docs/data-quality-engine.md))
-run for real today - a clean file closes `SUCCESS`, a middling one
-`WARNING`, and a low-quality one `FAILED` (audit-only - the load already
-happened); analytics arrive in Phase 15+. Scheduled-mode (`--scheduler`)
-wiring is added in Phase 35.
+The pipeline records each run, stage outcome, duration, data-quality result, and
+failure state. Generated reports are written to `reports/`; structured logs are
+written to `logs/`.
 
----
+### 4. Open the operational application
 
-## Development rules (from the specification)
+```powershell
+streamlit run streamlit_app/Overview.py
+```
 
-1. Never fake functionality.
-2. Never hard-code analytical results.
-3. PostgreSQL and deterministic analytics are the source of truth.
-4. The LLM is an explanation / interface layer, not the source of numerical truth.
-5. Raw data must remain immutable.
-6. Invalid data must be traceable.
-7. Every important pipeline stage must be logged.
-8. Every important feature must have tests.
-9. Never commit credentials.
-10. Do not add complexity just to look advanced.
-11. Finish P0 features before P1 / P2.
-12. Do not proceed to the next phase while the current phase has unresolved critical failures.
+The Streamlit application includes pipeline control, data quality, anomalies,
+root cause, business impact, forecasting, customer and product intelligence, AI
+Analyst, and logs pages.
 
----
+### 5. Run the end-to-end demonstration
+
+```powershell
+python scripts/run_final_demo.py
+```
+
+This processes the held-out `data/sales_2026_09_09.csv` file and asks the AI
+Analyst, "Why did revenue decrease?" The demo requires the database and schema to
+be available.
+
+## Verification
+
+Run the full local test suite:
+
+```powershell
+pytest -q
+```
+
+Tests that require a live PostgreSQL instance are opt-in:
+
+```powershell
+$env:INSIGHTFORGE_PG_INTEGRATION = "1"
+pytest -q
+```
+
+The final acceptance scenarios, security checks, performance budgets, and
+integration-test boundaries are documented in
+[`docs/final-delivery.md`](docs/final-delivery.md).
+
+## Data contract and lifecycle
+
+The default retail dataset contains 22 fields covering orders, customers,
+products, geography, pricing, fulfillment, returns, revenue, and profit. The
+contract is defined in [`config/data_contract.yaml`](config/data_contract.yaml).
+
+Incoming files move through an auditable lifecycle:
+
+```text
+data/incoming/ -> data/raw/ -> data/processed/
+                         \-> data/archive/
+                         \-> data/rejected/
+```
+
+Raw inputs are preserved. Invalid rows are classified and retained with their
+pipeline run ID rather than silently discarded. Generated datasets and runtime
+artifacts are excluded from version control.
+
+## Security and trust model
+
+- Secrets are loaded from environment variables and excluded from Git.
+- Database statements use bound parameters; errors and logs are sanitized.
+- Natural-language SQL is restricted to read-only queries over an explicit table
+  and view allowlist, with row limits and statement timeouts.
+- The AI Analyst receives verified evidence packages, not unrestricted database
+  access or raw untrusted prompts.
+- Every important pipeline stage is run-scoped and auditable.
+- Deterministic database and Python calculations are authoritative; the LLM is an
+  explanation and interface layer only.
+
+See [`docs/security.md`](docs/security.md) and
+[`docs/ai-evidence.md`](docs/ai-evidence.md) for the detailed controls.
+
+## Repository layout
+
+```text
+src/             Pipeline, analytics, intelligence, AI, reporting, and operations
+sql/             PostgreSQL schema, KPI queries, and analytical views
+config/          Data contract, Docker Compose, and database bootstrap files
+scripts/         Dataset, database, report, and demonstration utilities
+streamlit_app/   Streamlit operational application
+dashboard/       Power BI Power Query and DAX assets
+alteryx/         Alteryx ingestion, quality, and ETL workflows
+tests/           Unit, contract, integration-gated, and UI tests
+docs/            Architecture, runbooks, requirements, and feature documentation
+data/            Local input, archive, processing, rejection, and demo data paths
+reports/         Generated Excel and PDF outputs
+logs/            Structured pipeline logs
+models/          Local model artifacts
+```
+
+## Documentation
+
+- [Architecture](docs/architecture.md) - system boundaries, control flow, and failure handling
+- [Data flow](docs/data-flow.md) - lifecycle, lineage, and database handoffs
+- [Database schema](docs/database-schema.md) - star schema and operational tables
+- [Data quality](docs/data-quality-engine.md) - scoring dimensions and quality gates
+- [Anomaly and drift detection](docs/anomaly-fusion.md) - detection, fusion, and PSI drift
+- [Business impact and root cause](docs/business-impact-engine.md) - explanation methodology
+- [Forecasting and recommendations](docs/forecasting.md) - prediction and action engines
+- [AI Analyst](docs/ai-analyst.md) - grounding and deterministic fallbacks
+- [Streamlit application](docs/streamlit-app.md) - application pages and controls
+- [Power BI model](docs/powerbi-data-model.md) - data model, measures, and refresh boundaries
+- [Phase status](docs/PHASE_STATUS.md) - authoritative implementation status
+
+## Project status
+
+The consolidated 36-phase implementation is complete. The authoritative phase
+matrix and environment-specific verification notes live in
+[`docs/PHASE_STATUS.md`](docs/PHASE_STATUS.md). Native Alteryx execution and
+Power BI refresh remain dependent on their desktop/gateway environments; Python
+fallbacks and documented integration boundaries are provided where appropriate.
 
 ## License
 
