@@ -86,6 +86,24 @@ def fmt_pct(value: float | None) -> str:
     return "-" if value is None else f"{value:.2f}%"
 
 
+def valid_report_path(path_str: str | None) -> Path | None:
+    """The resolved :class:`Path` for a non-empty file, or ``None``.
+
+    Used by the Reports page to decide whether to render an
+    ``st.download_button`` - never for a report that wasn't actually
+    generated (a missing key, a relative path that no longer resolves, or a
+    zero-byte file all read as "not available" rather than a broken
+    button)."""
+    if not path_str:
+        return None
+    path = Path(path_str)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    return path
+
+
 def run_pipeline_subprocess(args: list[str], timeout: int = 600) -> subprocess.CompletedProcess:
     """The only code-execution path in this app: a fixed argv list
     against ``run_pipeline.py``."""

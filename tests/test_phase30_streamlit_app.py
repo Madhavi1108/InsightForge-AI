@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from streamlit_app.common import fmt_currency, fmt_pct, incoming_files
+from streamlit_app.common import fmt_currency, fmt_pct, incoming_files, valid_report_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STREAMLIT_DIR = PROJECT_ROOT / "streamlit_app"
@@ -34,8 +34,8 @@ no_live_db = pytest.mark.skipif(
 ALL_PAGES = [STREAMLIT_DIR / "Overview.py", *sorted((STREAMLIT_DIR / "pages").glob("*.py"))]
 
 
-def test_all_11_pages_exist():
-    assert len(ALL_PAGES) == 11, [p.name for p in ALL_PAGES]
+def test_all_14_pages_exist():
+    assert len(ALL_PAGES) == 14, [p.name for p in ALL_PAGES]
 
 
 def test_common_module_files_exist():
@@ -78,6 +78,27 @@ def test_incoming_files_lists_csvs_only(tmp_path, monkeypatch):
 
     monkeypatch.setattr(common, "get_paths", lambda: _FakePaths())
     assert incoming_files() == ["a.csv", "b.csv"]
+
+
+def test_valid_report_path_none_for_missing_input():
+    assert valid_report_path(None) is None
+    assert valid_report_path("") is None
+
+
+def test_valid_report_path_none_for_nonexistent_file(tmp_path):
+    assert valid_report_path(str(tmp_path / "does_not_exist.xlsx")) is None
+
+
+def test_valid_report_path_none_for_empty_file(tmp_path):
+    empty = tmp_path / "empty.pdf"
+    empty.write_bytes(b"")
+    assert valid_report_path(str(empty)) is None
+
+
+def test_valid_report_path_returns_path_for_real_file(tmp_path):
+    real = tmp_path / "report.xlsx"
+    real.write_bytes(b"data")
+    assert valid_report_path(str(real)) == real
 
 
 # --------------------------------------------------------------------------- #

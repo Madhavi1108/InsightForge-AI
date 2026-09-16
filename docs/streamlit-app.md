@@ -2,7 +2,10 @@
 
 > Phase 30 deliverable (spec Phases 58-59, FR-22). `streamlit_app/` is the
 > first Presentation-layer phase: all 11 spec-named pages, plus controlled
-> pipeline actions.
+> pipeline actions. A later gap-filling pass (`docs/FRONTEND_AUDIT.md`,
+> `docs/FRONTEND_IMPLEMENTATION_REPORT.md`) added 3 more pages -
+> Recommendations, Reports, Alerts - surfacing backend modules that were
+> already fully built but not yet exposed in the UI. 14 pages total.
 
 ## 1. What the spec says
 
@@ -54,10 +57,14 @@ directory on `sys.path`, not the project root) or under pytest (where
 | 9 | `pages/8_Products.py` | `src.product_intelligence.analyze_product_intelligence` |
 | 10 | `pages/9_AI_Analyst.py` | `src.ai_analyst.answer_question` (6 quick questions), `src.nl_to_sql.ask` (ad-hoc tab) |
 | 11 | `pages/10_Logs.py` | `pipeline_runs` full history + `data/processed/*.json` summaries |
+| 12 | `pages/11_Recommendations.py` | `src.recommendations.generate_recommendations` (full list; Overview only shows the top 5) |
+| 13 | `pages/12_Reports.py` | `pipeline_runs.stage_metrics->'report'` paths, verified on disk before offering a download |
+| 14 | `pages/13_Alerts.py` | `src.alerts.build_alert`/`route_for_severity` (review only - never calls `dispatch_alerts`/`send_alert_email`) |
 
 Streamlit auto-orders `pages/` by filename; the `N_Name.py` prefixes
 reproduce the spec's own page order, with `Overview.py` as the entry
-script (nav item 1 by construction).
+script (nav item 1 by construction). Pages 12-14 are beyond the spec's
+original 11 and continue the same numbering scheme.
 
 `pages/4_Root_Cause.py` and `pages/6_Forecast.py` call an analytics
 function on user input inside `st.spinner` + `try/except`, rendering

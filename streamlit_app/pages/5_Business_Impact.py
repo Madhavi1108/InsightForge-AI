@@ -27,7 +27,19 @@ if not series:
     st.info("Not enough history yet for a business-impact assessment.")
     st.stop()
 
-latest = series[-1]
+dates = [r.date for r in series]
+date_range = st.date_input("Date range", value=(min(dates), max(dates)))
+if isinstance(date_range, tuple) and len(date_range) == 2:
+    start, end = date_range
+else:
+    start, end = min(dates), max(dates)
+filtered = [r for r in series if start <= r.date <= end]
+
+if not filtered:
+    st.caption("No data in range.")
+    st.stop()
+
+latest = filtered[-1]
 cols = st.columns(4)
 cols[0].metric("Revenue gap", fmt_currency(latest.revenue_gap))
 cols[1].metric("Profit gap", fmt_currency(latest.profit_gap))
@@ -38,8 +50,8 @@ st.caption(f"As of {latest.date} - {latest.customers_affected} customers, "
 
 st.subheader("Gap over time")
 st.line_chart(
-    {"date": [r.date for r in series],
-     "revenue_gap": [r.revenue_gap for r in series],
-     "profit_gap": [r.profit_gap for r in series]},
+    {"date": [r.date for r in filtered],
+     "revenue_gap": [r.revenue_gap for r in filtered],
+     "profit_gap": [r.profit_gap for r in filtered]},
     x="date",
 )
