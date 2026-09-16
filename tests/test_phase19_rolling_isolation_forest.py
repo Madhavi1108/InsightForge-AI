@@ -217,7 +217,11 @@ def test_detect_all_flags_injected_extreme_day(tmp_path, monkeypatch):
         codes.append(orchestrator.run_file(p.incoming / name))
 
     try:
-        assert all(c == 0 for c in codes)
+        # The injected day's 50x revenue also fails the DQ accuracy check,
+        # correctly dropping that run's DQ score below the REJECT gate (9) -
+        # this test only needs the anomaly detectors to fire, not every run
+        # to have "succeeded".
+        assert all(c in (0, 9) for c in codes)
         rolling = detect_all_rolling_baseline(db, metrics=("revenue",))
         iforest = detect_all_isolation_forest(db, metrics=("revenue",))
         assert any(r.is_anomaly for r in rolling["revenue"])

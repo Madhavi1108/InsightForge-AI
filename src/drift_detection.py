@@ -189,7 +189,7 @@ def detect_drift_for_feature(
 def _fetch_column(db: Database, column: str, start: date, end: date) -> list:
     rows = db.fetch_all(
         f"SELECT {column} AS value FROM fact_sales "
-        "WHERE order_date >= :start AND order_date <= :end AND value IS NOT NULL",
+        f"WHERE order_date >= :start AND order_date <= :end AND {column} IS NOT NULL",
         {"start": start, "end": end},
     )
     return [float(r["value"]) if isinstance(r["value"], (int, float)) else r["value"]

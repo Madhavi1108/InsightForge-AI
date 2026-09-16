@@ -11,11 +11,12 @@ Usage
     python run_pipeline.py --file data/incoming/sales_2026_09_09.csv
     python run_pipeline.py --scan            # process every file in data/incoming/
     python run_pipeline.py --watch           # watch data/incoming/ for new files
-    python run_pipeline.py --scheduler       # scheduled-mode loop (arrives in Phase 35)
+    python run_pipeline.py --scheduler       # scheduled-mode loop (src/scheduler.py)
 
-Ingestion + SHA-256 fingerprinting (Phase 10) and schema/contract validation
-(Phase 11) run for real; ETL and analytics arrive in Phase 12+. Scheduled mode
-is wired in Phase 35.
+Delegates to ``src.orchestrator``, which runs the full per-file pipeline:
+ingestion + SHA-256 fingerprinting, schema/contract validation, Alteryx
+ingestion/DQ workflows, the star-schema ETL load, the data-quality gate,
+anomaly fusion, drift detection, report generation, and alert dispatch.
 
 Exit codes: 0 ok, 2 no mode, 3 nothing to do / not built, 4 database
 unavailable, 5 file failed ingestion, 6 file failed schema validation.
@@ -44,14 +45,14 @@ def _load_env() -> None:
 
 
 def _run_orchestrator(args: argparse.Namespace) -> int:
-    """Delegate to the real orchestrator once it exists (Phase 10)."""
+    """Delegate to the real orchestrator (``src/orchestrator.py``)."""
     try:
         from src.orchestrator import main as orchestrator_main  # type: ignore
     except ModuleNotFoundError:
         print(
-            "[blocked] src/orchestrator.py is not implemented yet.\n"
-            "          The pipeline orchestrator arrives in Phase 10. "
-            "See docs/PHASE_STATUS.md for current progress."
+            "[blocked] src/orchestrator.py could not be imported - check the "
+            "environment (requirements.txt) and .env. See docs/PHASE_STATUS.md "
+            "for current progress."
         )
         return 3
     return int(orchestrator_main(args))

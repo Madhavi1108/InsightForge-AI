@@ -31,11 +31,17 @@ dq_rows = db.fetch_all(
     "SELECT dimension, score, passed, records_checked, records_failed "
     "FROM data_quality_results WHERE run_id = :r ORDER BY dimension", {"r": run_id},
 )
-st.dataframe(dq_rows, use_container_width=True) if dq_rows else st.caption("No DQ results for this run.")
+if dq_rows:
+    st.dataframe(dq_rows, use_container_width=True)
+else:
+    st.caption("No DQ results for this run.")
 
 st.subheader("Data drift (PSI)")
 drift_rows = db.fetch_all(
     "SELECT feature, psi_score, status, baseline_count, current_count "
     "FROM drift_results WHERE run_id = :r ORDER BY psi_score DESC NULLS LAST", {"r": run_id},
 )
-st.dataframe(drift_rows, use_container_width=True) if drift_rows else st.caption("No drift results for this run.")
+if drift_rows:
+    st.dataframe(drift_rows, use_container_width=True)
+else:
+    st.caption("No drift results for this run.")

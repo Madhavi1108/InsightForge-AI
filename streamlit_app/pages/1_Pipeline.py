@@ -45,7 +45,10 @@ runs = db.fetch_all(
     "rows_valid, rows_rejected, dq_score, error FROM pipeline_runs "
     "ORDER BY started_at DESC LIMIT 20"
 )
-st.dataframe(runs, use_container_width=True) if runs else st.caption("No pipeline runs yet.")
+if runs:
+    st.dataframe(runs, use_container_width=True)
+else:
+    st.caption("No pipeline runs yet.")
 
 st.subheader("Inspect a run")
 default_run_id = runs[0]["run_id"] if runs else 1

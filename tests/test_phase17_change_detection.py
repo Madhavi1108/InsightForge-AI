@@ -259,8 +259,8 @@ def test_compare_period_day_matches_pandas(_two_days_loaded):
     rec = by_metric["revenue"]
     assert abs(float(rec.current) - expected_current) < 0.05
     assert abs(float(rec.previous) - expected_previous) < 0.05
-    assert rec.period_key == str(day_b)
-    assert rec.previous_period_key == str(day_a)
+    assert rec.period_key == str(day_b.date())
+    assert rec.previous_period_key == str(day_a.date())
 
 
 @pg_integration

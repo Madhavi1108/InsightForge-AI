@@ -138,11 +138,14 @@ def classify_products(
         return []
     threshold = threshold_pct if threshold_pct is not None else growth_threshold_pct()
 
-    revenue = [t["revenue"] for t in totals]
-    profit = [t["profit"] for t in totals]
-    margin = [t["margin_pct"] for t in totals]
-    units = [t["units"] for t in totals]
-    return_rate = [t["return_rate_pct"] for t in totals]
+    # Postgres NUMERIC columns come back as decimal.Decimal (psycopg2), which
+    # np.percentile can't interpolate against a float weight - coerce once
+    # here rather than at every call site.
+    revenue = [float(t["revenue"]) for t in totals]
+    profit = [float(t["profit"]) for t in totals]
+    margin = [float(t["margin_pct"]) for t in totals]
+    units = [float(t["units"]) for t in totals]
+    return_rate = [float(t["return_rate_pct"]) for t in totals]
 
     revenue_p75 = float(np.percentile(revenue, 75))
     profit_p75 = float(np.percentile(profit, 75))

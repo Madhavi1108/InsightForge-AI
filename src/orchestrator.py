@@ -10,16 +10,19 @@ workflows** (``src/alteryx.py``, Phase 12), the **star-schema load**
 (``src/etl.py``, Phase 13), the **data quality engine & gate**
 (``src/data_quality.py``, Phase 14), **anomaly fusion**
 (``src/anomaly_fusion.py``, Phase 20), **drift detection**
-(``src/drift_detection.py``, Phase 21), **automated reporting**
-(``src/reporting.py``, Phase 33), and the **alert & email engine**
-(``src/alerts.py``, Phase 34). The DQ gate gives the run its
-terminal status: ``>=95`` score -> ``SUCCESS``, ``90-94.99`` -> ``WARNING``
-(the run still completed), ``<90`` -> ``FAILED`` - an audit-only REJECT that
-never deletes or rolls back rows Phase 13 already loaded into
-``fact_sales``. Anomaly fusion, drift detection, reporting, and alerting all
-run after the gate and never change the terminal status - each is advisory
-analytics (a failure in any of them is logged into ``stage_metrics``, never
-fails the run).
+(``src/drift_detection.py``, Phase 21), **forecasting**
+(``src/forecasting.py``, Phase 25), **root-cause -> impact ->
+recommendations** (``src/recommendations.py``, Phase 26, which itself calls
+``src/root_cause.py`` and ``src/impact_analysis.py`` to enrich each
+recommendation), **AI evidence assembly** (``src/ai_evidence.py``, Phase
+27), **automated reporting** (``src/reporting.py``, Phase 33), and the
+**alert & email engine** (``src/alerts.py``, Phase 34). The DQ gate gives
+the run its terminal status: ``>=95`` score -> ``SUCCESS``, ``90-94.99`` ->
+``WARNING`` (the run still completed), ``<90`` -> ``FAILED`` - an
+audit-only REJECT that never deletes or rolls back rows Phase 13 already
+loaded into ``fact_sales``. Every stage after the gate runs and never
+changes the terminal status - each is advisory analytics (a failure in any
+of them is logged into ``stage_metrics``, never fails the run).
 
 **Observability & failure recovery (Phase 35, ``src/observability.py``)**:
 structured JSON logs land in ``logs/pipeline.log`` tagged with each run's
@@ -60,6 +63,7 @@ from dataclasses import asdict
 import pandas as pd
 
 from src import ingestion
+from src.ai_evidence import assemble_all_evidence
 from src.alerts import dispatch_alerts
 from src.alteryx import run_data_quality_workflow, run_ingestion_workflow
 from src.anomaly_fusion import detect_and_persist_anomalies
@@ -68,8 +72,10 @@ from src.data_quality import DIMENSIONS, DqReport, score_file, thresholds
 from src.database import Database, DatabaseError
 from src.drift_detection import detect_and_persist_drift
 from src.etl import EtlLoadError, run_sales_etl_workflow
+from src.forecasting import generate_and_persist_forecast
 from src.ingestion import IngestionError, IngestionResult, ingest_file
 from src.observability import Stopwatch, configure_logging, get_run_logger, mark_run_failed, retry_stage
+from src.recommendations import generate_and_persist_recommendations
 from src.reporting import generate_reports
 from src.validation import ValidationResult, validate_csv
 
@@ -100,6 +106,9 @@ def _write_processed_summary(processed_dir: Path, result: IngestionResult,
         "dq": stage_metrics.get("dq"),
         "anomalies": stage_metrics.get("anomalies"),
         "drift": stage_metrics.get("drift"),
+        "forecast": stage_metrics.get("forecast"),
+        "recommendations": stage_metrics.get("recommendations"),
+        "ai_evidence": stage_metrics.get("ai_evidence"),
         "status": status,
     }
     out = processed_dir / f"{Path(result.file_name).stem}.json"
@@ -162,6 +171,13 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
     """Ingest one file end-to-end (as far as the pipeline is currently built)."""
     paths = get_paths()
     path = Path(path)
+
+    if not dry_run:
+        # Idempotent (src.observability.configure_logging's own guard) -
+        # safe whether or not main()'s _configure_logging() already ran.
+        # Callers that invoke run_file() directly (tests, a future direct
+        # API use) still get the structured logs/pipeline.log file.
+        _configure_logging()
 
     if dry_run:
         print(f"[dry-run] would ingest {path.name}")
@@ -340,13 +356,75 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
             stage_metrics["drift"] = {"error": f"drift detection failed: {type(exc).__name__}"}
             run_logger.warning("drift detection failed: %s", type(exc).__name__)
 
-        # Stage 9 - automated Excel & PDF reports (Phase 33) - advisory
+        # Stage 9 - forecasting (Phase 25 / spec Phase 38-39) - advisory
+        # only, never affects status. A single atomic execute_many -> safe
+        # to retry up to 3x.
+        try:
+            with Stopwatch() as stage_forecast_timer:
+                forecast_points = retry_stage(
+                    lambda: generate_and_persist_forecast(db, result.run_id),
+                    what="forecasting", stage_logger=run_logger,
+                )
+            stage_metrics["forecast"] = {
+                "count": len(forecast_points),
+                "by_metric": {m: sum(1 for p in forecast_points if p.metric == m)
+                             for m in {p.metric for p in forecast_points}},
+                "seconds": stage_forecast_timer.seconds,
+            }
+        except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
+            stage_metrics["forecast"] = {"error": f"forecasting failed: {type(exc).__name__}"}
+            run_logger.warning("forecasting failed: %s", type(exc).__name__)
+
+        # Stage 10 - root-cause -> impact -> recommendations (Phase 22-23 &
+        # 26 / spec Phase 43-46, 40-42) - advisory only, never affects
+        # status. generate_and_persist_recommendations already calls
+        # analyze_root_cause and assess_business_impact internally to
+        # enrich each recommendation's rationale/priority (src/recommendations.py),
+        # so this single stage is what actually connects RCA and business
+        # impact into the per-file pipeline - they stay pure on-demand
+        # modules (no dedicated table; see their own module docstrings) but
+        # are no longer disconnected from a file's run. A single atomic
+        # execute_many -> safe to retry up to 3x.
+        try:
+            with Stopwatch() as stage_reco_timer:
+                recommendations = retry_stage(
+                    lambda: generate_and_persist_recommendations(db, result.run_id),
+                    what="recommendations", stage_logger=run_logger,
+                )
+            stage_metrics["recommendations"] = {
+                "count": len(recommendations),
+                "by_priority": {band: sum(1 for r in recommendations if r.priority_band == band)
+                               for band in ("LOW", "MEDIUM", "HIGH", "CRITICAL")},
+                "seconds": stage_reco_timer.seconds,
+            }
+        except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
+            stage_metrics["recommendations"] = {"error": f"recommendations failed: {type(exc).__name__}"}
+            run_logger.warning("recommendations failed: %s", type(exc).__name__)
+
+        # Stage 11 - AI evidence assembly (Phase 27 / spec Phase 42) -
+        # advisory only, never affects status, never persisted (consumed
+        # live by the AI Analyst / NL-to-SQL callers - src/ai_evidence.py's
+        # own module docstring) - not retried since it has no side effect
+        # to duplicate, just a read-only assembly pass.
+        try:
+            with Stopwatch() as stage_evidence_timer:
+                evidence_packages = assemble_all_evidence(db)
+            stage_metrics["ai_evidence"] = {
+                "count": len(evidence_packages),
+                "significant": sum(1 for e in evidence_packages if e.significant),
+                "seconds": stage_evidence_timer.seconds,
+            }
+        except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
+            stage_metrics["ai_evidence"] = {"error": f"AI evidence assembly failed: {type(exc).__name__}"}
+            run_logger.warning("AI evidence assembly failed: %s", type(exc).__name__)
+
+        # Stage 12 - automated Excel & PDF reports (Phase 33) - advisory
         # only, never affects status. Overwrites deterministic filenames
         # -> safe to retry up to 3x.
         excel_path: Path | None = None
         pdf_path: Path | None = None
         try:
-            with Stopwatch() as stage9_timer:
+            with Stopwatch() as stage12_timer:
                 excel_path, pdf_path = retry_stage(
                     lambda: generate_reports(
                         db, result.run_id, dq_report=dq_report, reports_dir=paths.reports,
@@ -354,23 +432,23 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
                     what="report generation", stage_logger=run_logger,
                 )
             stage_metrics["report"] = {"excel": str(excel_path), "pdf": str(pdf_path),
-                                       "seconds": stage9_timer.seconds}
+                                       "seconds": stage12_timer.seconds}
         except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
             stage_metrics["report"] = {"error": f"report generation failed: {type(exc).__name__}"}
             run_logger.warning("report generation failed: %s", type(exc).__name__)
 
-        # Stage 10 - severity-routed alerts & email engine (Phase 34) -
+        # Stage 13 - severity-routed alerts & email engine (Phase 34) -
         # advisory only, never affects status. NOT retried: a retry after a
         # partially-successful attempt could resend a real email.
         try:
-            with Stopwatch() as stage10_timer:
+            with Stopwatch() as stage13_timer:
                 alerts = dispatch_alerts(db, excel_path=excel_path, pdf_path=pdf_path)
             stage_metrics["alert"] = {
                 "count": len(alerts),
                 "emails_sent": sum(1 for a in alerts if a["email_sent"]),
                 "by_route": {route: sum(1 for a in alerts if a["route"] == route)
                             for route in ("dashboard", "streamlit", "email", "immediate_email")},
-                "seconds": stage10_timer.seconds,
+                "seconds": stage13_timer.seconds,
             }
         except Exception as exc:  # noqa: BLE001 - advisory analytics, never fails the run
             stage_metrics["alert"] = {"error": f"alert dispatch failed: {type(exc).__name__}"}
@@ -407,6 +485,9 @@ def run_file(path: Path, *, dry_run: bool = False) -> int:
               f"DQ {dq_report.overall_score} ({dq_report.gate}) - "
               f"anomalies {stage_metrics['anomalies'].get('count', 'n/a')} - "
               f"drift {stage_metrics['drift'].get('count', 'n/a')} - "
+              f"forecast {stage_metrics['forecast'].get('count', 'n/a')} - "
+              f"recommendations {stage_metrics['recommendations'].get('count', 'n/a')} - "
+              f"evidence {stage_metrics['ai_evidence'].get('count', 'n/a')} - "
               f"report {'ok' if 'error' not in stage_metrics['report'] else 'failed'} - "
               f"alerts {stage_metrics['alert'].get('count', 'n/a')} - {status}")
         return 9 if dq_report.gate == "REJECT" else 0

@@ -110,13 +110,15 @@ stage execution"), then asks the AI Analyst the demo's own question and
 prints the grounded answer (summary, root cause, impact, recommendation,
 evidence).
 
-**This sandbox has no Docker and no PostgreSQL installed**
-(`docker --version` -> command not found), so the actual live run could
-not be executed in this session - consistent with every
-`INSIGHTFORGE_PG_INTEGRATION=1`-gated test since Phase 9, none of which
-have run live here either. Per development rule 1 ("never fake
-functionality"), this is stated plainly rather than fabricating a
-transcript. To run the real demo:
+A later verification session (see `docs/BACKEND_AUDIT.md` /
+`docs/BACKEND_IMPLEMENTATION_REPORT.md`) had Docker Desktop available,
+stood up the real Postgres container, and ran this demo for real - the
+end-to-end run, its output, and the fixes it surfaced (a `drift_detection.py`
+SQL bug referencing a `SELECT`-alias inside its own `WHERE` clause, and two
+Streamlit pages crashing on a bare ternary expression Streamlit's "magic"
+mode tried to auto-render) are documented there rather than here, so this
+file's own text is left as the honest record of what Phase 36 itself could
+and couldn't verify in its own sandbox. To run the real demo:
 
 ```powershell
 docker compose -f config/docker-compose.postgres.yml up -d
