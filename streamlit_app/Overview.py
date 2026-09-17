@@ -19,6 +19,38 @@ st.title("Overview")
 
 db = require_database()
 
+records = compare_period(db, "day")
+try:
+    recs = generate_recommendations(db)[:5]
+except Exception as exc:  # noqa: BLE001 - never crash the page on a downstream failure
+    st.warning(f"Could not load recommendations: {exc}")
+    recs = []
+
+significant = [r for r in records if r.significant]
+if significant or recs:
+    with st.container(key="insightforge-hero", border=True):
+        st.subheader("Insight Pulse")
+        top_move = max(significant, key=lambda r: abs(r.pct_change or 0)) if significant else None
+        top_rec = recs[0] if recs else None
+        if top_move:
+            st.markdown(
+                f"**{top_move.metric.replace('_', ' ').title()}** moved **{top_move.direction}** "
+                f"**{abs(top_move.pct_change):.1f}%** versus the previous day "
+                f"(now {top_move.current:,.2f})."
+            )
+        if top_rec:
+            cols = st.columns(3)
+            cols[0].metric("Primary driver", top_rec.metric)
+            cols[1].metric(
+                "Business impact",
+                fmt_currency(top_rec.impact_value) if top_rec.impact_value is not None else "-",
+            )
+            cols[2].metric("Confidence", f"{top_rec.confidence:.0%}")
+            st.caption(top_rec.rationale)
+            st.page_link("pages/4_Root_Cause.py", label="Investigate root cause", icon="\U0001F50D")
+else:
+    st.caption("Insight Pulse: nothing significant to report for the latest period.")
+
 st.subheader("Data freshness")
 try:
     latest_run = db.fetch_one(
@@ -42,7 +74,6 @@ if date_range and date_range["min_date"] and date_range["max_date"]:
     st.caption(f"Data covers {date_range['min_date']} to {date_range['max_date']}.")
 
 st.subheader("Latest daily KPIs")
-records = compare_period(db, "day")
 by_metric = {r.metric: r for r in records}
 
 
@@ -80,7 +111,6 @@ else:
         st.info("No KPI data yet - run the pipeline from the Pipeline page.")
 
 st.subheader("Significant day-over-day moves")
-significant = [r for r in records if r.significant]
 if significant:
     st.dataframe(
         [{"metric": r.metric, "direction": r.direction,
@@ -91,11 +121,6 @@ else:
     st.caption("Nothing significant today.")
 
 st.subheader("Top open recommendations")
-try:
-    recs = generate_recommendations(db)[:5]
-except Exception as exc:  # noqa: BLE001 - never crash the page on a downstream failure
-    st.warning(f"Could not load recommendations: {exc}")
-    recs = []
 if recs:
     st.dataframe(
         [{"title": r.title, "severity": r.severity,

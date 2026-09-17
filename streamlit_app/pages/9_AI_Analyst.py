@@ -17,6 +17,8 @@ st.set_page_config(page_title="AI Analyst", layout="wide")
 st.title("AI Analyst")
 
 db = require_database()
+with st.container(key="ai-page-accent"):
+    st.caption("Ask InsightForge about your business data - every answer is grounded in verified evidence.")
 
 tab_analyst, tab_sql = st.tabs(["Ask the AI Analyst", "Ask an ad-hoc question (NL-to-SQL)"])
 

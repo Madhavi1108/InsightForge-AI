@@ -61,9 +61,130 @@ def get_database() -> Database:
     return Database()
 
 
+def inject_theme_css() -> None:
+    """The dark navy/electric-blue/AI-indigo design system
+    (``docs/UI_UX_REDESIGN.md``) - one ``<style>`` block, injected here so
+    every page gets it for free via :func:`require_database` without
+    editing any of the 14 page files individually. Pure CSS on top of
+    ``.streamlit/config.toml``'s base theme - no new widgets, nothing that
+    could change page structure or break the existing AppTest/Playwright
+    suites, which assert on content and behavior, never on style."""
+    st.markdown(
+        """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    --background: #07111F;
+    --surface: #111E30;
+    --surface-elevated: #142238;
+    --border: #1B2942;
+    --primary: #3B82F6;
+    --secondary: #22D3EE;
+    --accent-ai: #8B5CF6;
+    --success: #22C55E;
+    --warning: #F59E0B;
+    --danger: #EF4444;
+    --text-primary: #E7ECF5;
+    --text-secondary: #A9B4C6;
+    --muted: #6B7A93;
+}
+
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+/* Subtle layered background - no animation. */
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(ellipse 80% 50% at 15% -10%, rgba(59, 130, 246, 0.10), transparent),
+        radial-gradient(ellipse 60% 40% at 90% 0%, rgba(139, 92, 246, 0.08), transparent),
+        var(--background);
+}
+
+/* Sidebar surface - Streamlit 1.40.1 has no [theme.sidebar] config key,
+   so this is CSS-only. */
+[data-testid="stSidebar"] {
+    background: #0B1626;
+    border-right: 1px solid var(--border);
+}
+[data-testid="stSidebarNav"] a[aria-current="page"] {
+    background: rgba(59, 130, 246, 0.15);
+    border-radius: 6px;
+}
+
+/* KPI tiles (st.metric) as cards. */
+[data-testid="stMetric"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+}
+[data-testid="stMetricLabel"] { color: var(--text-secondary); }
+[data-testid="stMetricValue"] {
+    color: var(--text-primary);
+    font-weight: 700;
+    font-size: 1.5rem;
+    white-space: normal;
+    overflow-wrap: break-word;
+}
+
+/* Expanders / dataframes as consistent cards. */
+[data-testid="stExpander"] {
+    background: var(--surface);
+    border: 1px solid var(--border) !important;
+    border-radius: 10px;
+}
+[data-testid="stDataFrame"] {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+/* Buttons - primary electric-blue action. */
+[data-testid="stButton"] button {
+    border-radius: 8px;
+    font-weight: 600;
+    border: 1px solid var(--border);
+}
+[data-testid="stButton"] button[kind="primary"] {
+    background: var(--primary);
+    border: none;
+}
+
+/* Status alerts - color is never the only signal; Streamlit already
+   pairs each with an icon, this just keeps the left-border consistent
+   with the token palette above. */
+[data-testid="stAlert"] { border-radius: 8px; border-left: 4px solid var(--muted); }
+[data-testid="stAlert"][data-baseweb="notification"] p { color: var(--text-primary); }
+
+/* st.caption / small text - the color-contrast fix. Streamlit's default
+   (#83858c on white) measured 3.68:1, below the 4.5:1 WCAG AA minimum
+   (docs/CHROME_E2E_AUDIT.md sec 6). --text-secondary on the dark
+   background here clears that bar with real margin. */
+[data-testid="stCaptionContainer"], small, .stCaption { color: var(--text-secondary) !important; }
+
+/* AI-flavored pages opt in via st.container(key="ai-page-accent") (see
+   9_AI_Analyst.py / 11_Recommendations.py). */
+.st-key-ai-page-accent {
+    border-left: 3px solid var(--accent-ai);
+    padding-left: 0.75rem;
+}
+
+/* Overview's "Insight Pulse" hero card - st.container(key="insightforge-hero",
+   border=True) gives its wrapper a stable "st-key-insightforge-hero" class. */
+.st-key-insightforge-hero {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.10), rgba(139, 92, 246, 0.08));
+    border-radius: 12px;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 def require_database() -> Database:
     """The cached :class:`Database`, or a friendly ``st.error`` +
     ``st.stop()`` when it can't be reached - every page's first line."""
+    inject_theme_css()
     db = get_database()
     if not db.ping():
         st.error(

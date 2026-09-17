@@ -1,0 +1,16 @@
+# InsightForge AI - dark theme (docs/UI_UX_REDESIGN.md).
+# Base palette; most visual polish (cards, status colors, hero section)
+# lives in streamlit_app/common.py::inject_theme_css()'s injected CSS,
+# which reads these same tokens - keep the two in sync if either changes.
+[theme]
+base = "dark"
+primaryColor = "#3B82F6"
+backgroundColor = "#07111F"
+secondaryBackgroundColor = "#111E30"
+textColor = "#E7ECF5"
+font = "sans serif"
+# Streamlit 1.40.1 doesn't support baseRadius/borderColor/showWidgetBorder/
+# [theme.sidebar] (confirmed via a real startup - Streamlit logs "is not a
+# valid config option" and ignores them) - those keys arrived in a later
+# Streamlit version. Card radius/borders/sidebar surface are handled by
+# streamlit_app/common.py::inject_theme_css()'s CSS instead.

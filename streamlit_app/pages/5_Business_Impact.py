@@ -1,6 +1,7 @@
 """Business Impact - expected vs. actual revenue/profit gap and at-risk
 figures (Phase 23)."""
 import sys
+from datetime import date as _date
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -27,13 +28,13 @@ if not series:
     st.info("Not enough history yet for a business-impact assessment.")
     st.stop()
 
-dates = [r.date for r in series]
+dates = [_date.fromisoformat(r.date) for r in series]
 date_range = st.date_input("Date range", value=(min(dates), max(dates)))
 if isinstance(date_range, tuple) and len(date_range) == 2:
     start, end = date_range
 else:
     start, end = min(dates), max(dates)
-filtered = [r for r in series if start <= r.date <= end]
+filtered = [r for r in series if start <= _date.fromisoformat(r.date) <= end]
 
 if not filtered:
     st.caption("No data in range.")

@@ -16,6 +16,8 @@ st.set_page_config(page_title="Recommendations", layout="wide")
 st.title("Recommendations")
 
 db = require_database()
+with st.container(key="ai-page-accent"):
+    st.caption("Priority-ranked, evidence-based recommendations - severity x impact x confidence.")
 
 try:
     recs = generate_recommendations(db)
