@@ -65,3 +65,12 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Node / Playwright E2E (e2e/)
+node_modules/
+e2e-report/
+e2e-results.json
+test-results/
+playwright-report/
+playwright/.cache/
+.playwright-streamlit-pid
